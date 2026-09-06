@@ -1,0 +1,16 @@
+{
+  "name": "Working Set",
+  "short_name": "Working Set",
+  "description": "An in-workout companion: pick exercises, log sets, and see last-time and personal-best reference while you lift.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#171512",
+  "theme_color": "#171512",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

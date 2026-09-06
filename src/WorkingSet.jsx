@@ -1,9 +1,15 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { supabase, isSupabaseConfigured } from "./lib/supabaseClient";
 
 // ————————————————————————————————————————————————
-// Working Set v11 — in-workout companion prototype
-// v11 change:
-//  - The precision scroller now also works with a mouse on
+// Working Set — in-workout companion
+// Phase 2: persistence via Supabase. History, custom exercises,
+//   and per-exercise trend/PB now live in the database (see
+//   supabase/schema.sql); the mock seed data from the prototype
+//   is gone. Built-in exercise definitions (name/range/cues/etc.)
+//   still live in code below — only their dynamic history/PB is
+//   fetched at load and written back after each workout.
+// v11: the precision scroller now also works with a mouse on
 //    desktop: vertical wheel scrubs it horizontally, click-and-
 //    drag scrubs it, and arrow / Page / Home-End keys nudge it.
 //    Touch on phones is unchanged (native horizontal swipe).
@@ -16,7 +22,6 @@ import { useState, useEffect, useRef, useMemo } from "react";
 // v6: bodyweight support (0 = BW) with falsy-zero fixes.
 // v5: stripped all remaining prescription; duration = first-to-
 //     last logged set.
-// All data lives in memory for this prototype.
 // ————————————————————————————————————————————————
 
 const C = {
@@ -32,15 +37,6 @@ const C = {
   sage: "#8CB474",
   sageDim: "#1E2418",
 };
-
-const PATTERNS = [
-  [-4, -3, -2, -1, 0],
-  [-3, -2, -2, -1, 0],
-  [-2, -2, -1, -1, 0],
-  [-3, -3, -2, -1, 0],
-];
-const mkHist = (lastV, step, seed) =>
-  PATTERNS[seed % PATTERNS.length].map((k) => Math.max(step, lastV + k * step));
 
 // Weights: [name, min, max, step, lastSession, reps, rest, cues]
 // Cardio:  [name, min, max, step, lastSession, cues]
@@ -157,20 +153,19 @@ const GROUP_DEFS = [
   },
 ];
 
+// Built-in exercises start with no history/PB — that's fetched from the
+// exercise_state table at load (see loadAll below) and keyed by this same id.
 const EX = {};
 const INITIAL_LISTS = {};
 const GROUPS = GROUP_DEFS.map((g) => {
   INITIAL_LISTS[g.id] = g.items.map((it, i) => {
     const id = `${g.id}${i}`;
-    const seed = i + g.id.length;
     if (g.cardio) {
-      const [name, min, max, step, lastV, cues] = it;
-      const hist = mkHist(lastV, 2, seed).map((v) => Math.max(min, v));
-      EX[id] = { name, min, max, step, history: hist, reps: 0, rest: 0, kind: "cardio", group: g.id, pb: Math.max(...hist) + (seed % 2) * 3, cues: cues || [] };
+      const [name, min, max, step, , cues] = it;
+      EX[id] = { name, min, max, step, history: [], reps: 0, rest: 0, kind: "cardio", group: g.id, pb: null, cues: cues || [] };
     } else {
-      const [name, min, max, step, lastV, reps, rest, cues] = it;
-      const hist = mkHist(lastV, step, seed);
-      EX[id] = { name, min, max, step, history: hist, reps, rest, kind: "weight", group: g.id, pb: Math.max(...hist) + (seed % 2) * step, cues: cues || [] };
+      const [name, min, max, step, , reps, rest, cues] = it;
+      EX[id] = { name, min, max, step, history: [], reps, rest, kind: "weight", group: g.id, pb: null, cues: cues || [] };
     }
     return id;
   });
@@ -192,28 +187,6 @@ const todayISO = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
-// ——— mock past workouts (power History + "last time" highlighting) ———
-const mkSets = (id) => {
-  const ex = EX[id];
-  const lv = last(ex.history);
-  if (ex.kind === "cardio") return [{ min: lv }];
-  return [
-    { w: Math.max(ex.step, lv - ex.step), r: ex.reps },
-    { w: lv, r: ex.reps },
-    { w: lv, r: Math.max(1, ex.reps - 2) },
-  ];
-};
-const H = (date, groups, durMin, ids) => ({
-  date, groups, durMin,
-  entries: ids.map((id) => ({ id, name: EX[id].name, kind: EX[id].kind, sets: mkSets(id) })),
-});
-const MOCK_HISTORY = [
-  H("2026-09-03", ["back", "biceps"], 48, ["back0", "back1", "back3", "biceps0", "biceps3"]),
-  H("2026-09-01", ["chest", "triceps"], 52, ["chest0", "chest3", "chest6", "triceps0", "triceps3"]),
-  H("2026-08-30", ["legs"], 55, ["legs0", "legs1", "legs2", "legs9", "legs11"]),
-  H("2026-08-28", ["shoulders", "cardio"], 45, ["shoulders0", "shoulders1", "shoulders4", "shoulders8", "cardio0"]),
-  H("2026-08-26", ["back", "biceps"], 44, ["back0", "back4", "back6", "biceps1", "biceps6"]),
-];
 
 // Horizontal precision scroller (tape/ruler). Thumb-scroll to a 1-unit
 // value; last-time (grey) and PB (amber) render as ticks you can land on.
@@ -357,7 +330,8 @@ export default function WorkingSet() {
   const [screen, setScreen] = useState("setup"); // setup | pick | workout | summary | history | historyDetail
   const [exDb, setExDb] = useState(EX);
   const [groupLists, setGroupLists] = useState(INITIAL_LISTS);
-  const [history, setHistory] = useState(MOCK_HISTORY);
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(isSupabaseConfigured);
   const [histSel, setHistSel] = useState(null);
   const [selectedGroups, setSelectedGroups] = useState([]);
   const [restOn, setRestOn] = useState(false);
@@ -382,6 +356,74 @@ export default function WorkingSet() {
   const [copied, setCopied] = useState(false);
 
   const groupsLabel = selectedGroups.map((g) => GROUP_BY_ID[g].label).join(" + ");
+
+  // Load history, custom exercises, exercise trend/PB, and settings from
+  // Supabase once on mount. Built-in exercise definitions stay in code
+  // (EX/INITIAL_LISTS above) — only their dynamic history/PB is overlaid here.
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [workoutsRes, customRes, stateRes, settingsRes] = await Promise.all([
+          supabase.from("workouts").select("*").order("created_at", { ascending: false }),
+          supabase.from("custom_exercises").select("*"),
+          supabase.from("exercise_state").select("*"),
+          supabase.from("settings").select("*").eq("id", "default").maybeSingle(),
+        ]);
+        if (cancelled) return;
+        for (const res of [workoutsRes, customRes, stateRes, settingsRes]) {
+          if (res.error) throw res.error;
+        }
+
+        if (customRes.data?.length) {
+          setExDb((db) => {
+            const nd = { ...db };
+            customRes.data.forEach((row) => {
+              nd[row.id] = {
+                name: row.name, min: row.min, max: row.max, step: row.step,
+                history: [], reps: row.reps, rest: row.rest, kind: row.kind,
+                group: row.group_id, pb: null, cues: row.cues || [], start: row.start, custom: true,
+              };
+            });
+            return nd;
+          });
+          setGroupLists((gl) => {
+            const ng = { ...gl };
+            customRes.data.forEach((row) => {
+              if (!ng[row.group_id]) return;
+              if (!ng[row.group_id].includes(row.id)) ng[row.group_id] = [...ng[row.group_id], row.id];
+            });
+            return ng;
+          });
+        }
+
+        if (stateRes.data?.length) {
+          setExDb((db) => {
+            const nd = { ...db };
+            stateRes.data.forEach((row) => {
+              if (!nd[row.id]) return;
+              nd[row.id] = { ...nd[row.id], history: row.history || [], pb: row.pb ?? null };
+            });
+            return nd;
+          });
+        }
+
+        if (workoutsRes.data?.length) {
+          setHistory(workoutsRes.data.map((row) => ({
+            date: row.date, groups: row.groups, durMin: row.dur_min, entries: row.entries,
+          })));
+        }
+
+        if (settingsRes.data) setRestOn(!!settingsRes.data.rest_on);
+      } catch (err) {
+        console.error("Failed to load from Supabase", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (screen !== "workout") return;
@@ -413,6 +455,19 @@ export default function WorkingSet() {
   const togglePick = (id) =>
     setPicked((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
 
+  const toggleRestOn = () => {
+    setRestOn((v) => {
+      const next = !v;
+      if (isSupabaseConfigured) {
+        supabase
+          .from("settings")
+          .upsert({ id: "default", rest_on: next })
+          .then(({ error }) => { if (error) console.error("Failed to save rest timer setting", error); });
+      }
+      return next;
+    });
+  };
+
   const lastDoneIn = (gid) => {
     for (const h of history) {
       const ids = h.entries.map((e) => e.id).filter((id) => exDb[id] && exDb[id].group === gid);
@@ -436,6 +491,16 @@ export default function WorkingSet() {
     setGroupLists((gl) => ({ ...gl, [gid]: [...gl[gid], id] }));
     setAddingFor(null);
     setNewName("");
+    if (isSupabaseConfigured) {
+      supabase
+        .from("custom_exercises")
+        .insert({
+          id, group_id: gid, kind: ex.kind, name: ex.name,
+          min: ex.min, max: ex.max, step: ex.step, reps: ex.reps, rest: ex.rest,
+          start: ex.start, cues: ex.cues,
+        })
+        .then(({ error }) => { if (error) console.error("Failed to save custom exercise", error); });
+    }
     return id;
   };
 
@@ -487,17 +552,32 @@ export default function WorkingSet() {
     });
     setSummaryData({ durMin, totalSets, volume, lines, label: groupsLabel });
     if (entries.length) {
-      setHistory((h) => [{ date: todayISO(), groups: [...selectedGroups], durMin, entries }, ...h]);
+      const date = todayISO();
+      const groups = [...selectedGroups];
+      setHistory((h) => [{ date, groups, durMin, entries }, ...h]);
+      let updatedState = [];
       setExDb((db) => {
         const nd = { ...db };
-        entries.forEach((e) => {
+        updatedState = entries.map((e) => {
           const ex = nd[e.id];
-          if (!ex) return;
           const top = e.kind === "cardio" ? Math.max(...e.sets.map((s) => s.min)) : Math.max(...e.sets.map((s) => s.w));
-          nd[e.id] = { ...ex, history: [...ex.history, top].slice(-8), pb: ex.pb == null ? top : Math.max(ex.pb, top) };
+          const nextHistory = [...(ex?.history || []), top].slice(-8);
+          const nextPb = ex?.pb == null ? top : Math.max(ex.pb, top);
+          if (ex) nd[e.id] = { ...ex, history: nextHistory, pb: nextPb };
+          return { id: e.id, history: nextHistory, pb: nextPb };
         });
         return nd;
       });
+      if (isSupabaseConfigured) {
+        supabase
+          .from("workouts")
+          .insert({ date, groups, dur_min: durMin, entries })
+          .then(({ error }) => { if (error) console.error("Failed to save workout", error); });
+        supabase
+          .from("exercise_state")
+          .upsert(updatedState.map((s) => ({ id: s.id, history: s.history, pb: s.pb, updated_at: new Date().toISOString() })))
+          .then(({ error }) => { if (error) console.error("Failed to save exercise history/PB", error); });
+      }
     }
     setScreen("summary");
   };
@@ -689,6 +769,14 @@ export default function WorkingSet() {
     );
   };
 
+  if (loading) {
+    return (
+      <div style={{ ...page, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <p style={{ color: C.dust, fontWeight: 700, fontSize: 14 }}>Loading your data…</p>
+      </div>
+    );
+  }
+
   // ————————————————— SETUP —————————————————
   if (screen === "setup") {
     return (
@@ -737,7 +825,7 @@ export default function WorkingSet() {
           </div>
 
           <button
-            onClick={() => setRestOn((v) => !v)}
+            onClick={toggleRestOn}
             role="switch"
             aria-checked={restOn}
             className="ws-press mt-2 w-full flex items-center justify-between gap-4 px-3 py-2 text-left"
