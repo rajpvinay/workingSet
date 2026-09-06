@@ -326,6 +326,26 @@ function WeightScroller({ value, min, max, step, isCardio, lastVal, pb, onChange
   );
 }
 
+// Small decorative tick cluster echoing the precision scroller — the
+// app's one recurring visual signature, used as a quiet mark ahead of
+// screen headings instead of a generic rule or icon.
+function TickAccent() {
+  const bars = [
+    { h: 7, c: C.line },
+    { h: 13, c: C.cobalt },
+    { h: 7, c: C.line },
+    { h: 10, c: C.amber },
+    { h: 5, c: C.line },
+  ];
+  return (
+    <div className="flex items-end gap-1" style={{ height: 13, marginBottom: 9 }} aria-hidden="true">
+      {bars.map((b, i) => (
+        <div key={i} style={{ width: 3, height: b.h, background: b.c, borderRadius: 1 }} />
+      ))}
+    </div>
+  );
+}
+
 export default function WorkingSet() {
   const [screen, setScreen] = useState("setup"); // setup | pick | workout | summary | history | historyDetail
   const [exDb, setExDb] = useState(EX);
@@ -654,6 +674,10 @@ export default function WorkingSet() {
   const page = {
     minHeight: "100dvh",
     background: C.floor,
+    // A faint dot grid standing in for the rubber gym-floor studs the
+    // palette is named after — quiet enough to never compete with text.
+    backgroundImage: "radial-gradient(circle at 1px 1px, rgba(239,233,221,0.05) 1px, transparent 0)",
+    backgroundSize: "16px 16px",
     color: C.chalk,
     fontFamily: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
     boxSizing: "border-box",
@@ -792,7 +816,7 @@ export default function WorkingSet() {
         <style>{css}</style>
         <div className="max-w-md mx-auto h-full px-5 pt-3 pb-3 flex flex-col">
           <div className="flex items-center justify-between">
-            <p style={{ color: C.dust, fontWeight: 700, letterSpacing: "0.02em", fontSize: 12 }}>Working Set</p>
+            <p style={{ color: C.dust, fontWeight: 700, letterSpacing: "0.14em", fontSize: 11, textTransform: "uppercase" }}>Working Set</p>
             <button
               onClick={() => setScreen("history")}
               className="ws-press"
@@ -801,8 +825,8 @@ export default function WorkingSet() {
               History
             </button>
           </div>
-          <h1 className="mt-2" style={{ fontSize: 23, fontWeight: 800, lineHeight: 1.15, letterSpacing: "-0.02em" }}>
-            What are you training today?
+          <h1 className="mt-2" style={{ fontSize: 23, fontWeight: 800, lineHeight: 1.15, letterSpacing: "-0.03em" }}>
+            What are you <span style={{ color: C.cobalt }}>training</span> today?
           </h1>
           <p className="mt-1" style={{ color: C.dust, fontSize: 13 }}>
             Pick any combination of muscle groups. You'll choose the exercises yourself next.
@@ -870,7 +894,8 @@ export default function WorkingSet() {
           <button onClick={() => setScreen("setup")} style={{ background: "none", border: "none", color: C.dust, fontWeight: 600, cursor: "pointer", padding: 0 }}>
             Back
           </button>
-          <h1 className="mt-3" style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em" }}>{groupsLabel}</h1>
+          <div className="mt-3"><TickAccent /></div>
+          <h1 style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em" }}>{groupsLabel}</h1>
           <p className="mt-1" style={{ color: C.dust, fontSize: 15 }}>
             Pick your exercises. The order you pick them is the order you'll train.
           </p>
@@ -982,8 +1007,22 @@ export default function WorkingSet() {
     return (
       <div style={page}>
         <style>{css}</style>
-        <div style={{ height: 4, background: C.line }}>
-          <div style={{ height: 4, width: `${(idx / plan.length) * 100}%`, background: C.sage, transition: "width .3s ease" }} />
+        {/* progress, as ticks rather than a bar: one per exercise, echoing
+            the scroller — cobalt hero mark for current, sage for done */}
+        <div className="flex items-center justify-center gap-1" style={{ paddingTop: 8, paddingBottom: 4 }} role="img" aria-label={`Exercise ${idx + 1} of ${plan.length}`}>
+          {plan.map((_, i) => (
+            <div
+              key={i}
+              style={{
+                width: i === idx ? 4 : 3,
+                height: i === idx ? 14 : i < idx ? 10 : 7,
+                borderRadius: 2,
+                background: i === idx ? C.cobalt : i < idx ? C.sage : C.line,
+                transition: "all .25s ease",
+                flexShrink: 0,
+              }}
+            />
+          ))}
         </div>
 
         <div className="max-w-md mx-auto px-5 pt-2" style={{ paddingBottom: restEnds !== null && !sheetOpen ? 170 : 14 }}>
@@ -1250,7 +1289,8 @@ export default function WorkingSet() {
           <button onClick={() => setScreen("setup")} style={{ background: "none", border: "none", color: C.dust, fontWeight: 600, cursor: "pointer", padding: 0 }}>
             Back
           </button>
-          <h1 className="mt-3" style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em" }}>History</h1>
+          <div className="mt-3"><TickAccent /></div>
+          <h1 style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em" }}>History</h1>
           <p className="mt-1" style={{ color: C.dust, fontSize: 15 }}>Tap a day for the full workout.</p>
 
           <div className="mt-5 flex flex-col gap-2">
@@ -1297,7 +1337,8 @@ export default function WorkingSet() {
           <button onClick={() => setScreen("history")} style={{ background: "none", border: "none", color: C.dust, fontWeight: 600, cursor: "pointer", padding: 0 }}>
             Back to history
           </button>
-          <h1 className="mt-3 tabular-nums" style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em" }}>{fmtDate(h.date)}</h1>
+          <div className="mt-3"><TickAccent /></div>
+          <h1 className="tabular-nums" style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.02em" }}>{fmtDate(h.date)}</h1>
           <p className="mt-1" style={{ color: C.dust, fontSize: 15 }}>{label}</p>
 
           <div className="mt-6 grid grid-cols-3 gap-3">
@@ -1371,8 +1412,9 @@ export default function WorkingSet() {
     <div style={page}>
       <style>{css}</style>
       <div className="max-w-md mx-auto px-5 pt-8 pb-10">
-        <p style={{ color: C.dust, fontWeight: 700, fontSize: 13 }}>Working Set</p>
-        <h1 className="mt-3" style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em" }}>Workout complete</h1>
+        <p style={{ color: C.dust, fontWeight: 700, fontSize: 11, letterSpacing: "0.14em", textTransform: "uppercase" }}>Working Set</p>
+        <div className="mt-3"><TickAccent /></div>
+        <h1 style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em" }}>Workout <span style={{ color: C.sage }}>complete</span></h1>
         <p className="mt-1" style={{ color: C.dust, fontSize: 15 }}>{sd.label}{sd.lines.length ? " — saved to your history" : ""}</p>
 
         <div className="mt-6 grid grid-cols-3 gap-3">
