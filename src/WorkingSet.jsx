@@ -375,21 +375,40 @@ export default function WorkingSet() {
   const [summaryData, setSummaryData] = useState(null);
   const [copied, setCopied] = useState(false);
 
+  // Auth: session === undefined means "still checking"; null means "signed
+  // out"; an object means signed in. Skipped entirely when Supabase isn't
+  // configured, matching the existing no-persistence fallback.
+  const [session, setSession] = useState(isSupabaseConfigured ? undefined : null);
+  const userId = session?.user?.id ?? null;
+  const [authEmail, setAuthEmail] = useState("");
+  const [authSending, setAuthSending] = useState(false);
+  const [authSent, setAuthSent] = useState(false);
+  const [authError, setAuthError] = useState("");
+
   const groupsLabel = selectedGroups.map((g) => GROUP_BY_ID[g].label).join(" + ");
 
-  // Load history, custom exercises, exercise trend/PB, and settings from
-  // Supabase once on mount. Built-in exercise definitions stay in code
-  // (EX/INITIAL_LISTS above) — only their dynamic history/PB is overlaid here.
+  // Establish auth state once, then keep it in sync (covers the magic-link
+  // redirect landing back on this page, and manual sign-out).
   useEffect(() => {
     if (!isSupabaseConfigured) return;
+    supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // Load history, custom exercises, exercise trend/PB, and settings from
+  // Supabase once signed in. Built-in exercise definitions stay in code
+  // (EX/INITIAL_LISTS above) — only their dynamic history/PB is overlaid here.
+  useEffect(() => {
+    if (!isSupabaseConfigured || !userId) return;
     let cancelled = false;
     (async () => {
       try {
         const [workoutsRes, customRes, stateRes, settingsRes] = await Promise.all([
-          supabase.from("workouts").select("*").order("created_at", { ascending: false }),
-          supabase.from("custom_exercises").select("*"),
-          supabase.from("exercise_state").select("*"),
-          supabase.from("settings").select("*").eq("id", "default").maybeSingle(),
+          supabase.from("workouts").select("*").eq("user_id", userId).order("created_at", { ascending: false }),
+          supabase.from("custom_exercises").select("*").eq("user_id", userId),
+          supabase.from("exercise_state").select("*").eq("user_id", userId),
+          supabase.from("settings").select("*").eq("user_id", userId).maybeSingle(),
         ]);
         if (cancelled) return;
         for (const res of [workoutsRes, customRes, stateRes, settingsRes]) {
@@ -443,7 +462,7 @@ export default function WorkingSet() {
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     if (screen !== "workout") return;
@@ -478,10 +497,10 @@ export default function WorkingSet() {
   const toggleRestOn = () => {
     setRestOn((v) => {
       const next = !v;
-      if (isSupabaseConfigured) {
+      if (isSupabaseConfigured && userId) {
         supabase
           .from("settings")
-          .upsert({ id: "default", rest_on: next })
+          .upsert({ user_id: userId, rest_on: next })
           .then(({ error }) => { if (error) console.error("Failed to save rest timer setting", error); });
       }
       return next;
@@ -511,11 +530,11 @@ export default function WorkingSet() {
     setGroupLists((gl) => ({ ...gl, [gid]: [...gl[gid], id] }));
     setAddingFor(null);
     setNewName("");
-    if (isSupabaseConfigured) {
+    if (isSupabaseConfigured && userId) {
       supabase
         .from("custom_exercises")
         .insert({
-          id, group_id: gid, kind: ex.kind, name: ex.name,
+          id, user_id: userId, group_id: gid, kind: ex.kind, name: ex.name,
           min: ex.min, max: ex.max, step: ex.step, reps: ex.reps, rest: ex.rest,
           start: ex.start, cues: ex.cues,
         })
@@ -588,14 +607,17 @@ export default function WorkingSet() {
         });
         return nd;
       });
-      if (isSupabaseConfigured) {
+      if (isSupabaseConfigured && userId) {
         supabase
           .from("workouts")
-          .insert({ date, groups, dur_min: durMin, entries })
+          .insert({ user_id: userId, date, groups, dur_min: durMin, entries })
           .then(({ error }) => { if (error) console.error("Failed to save workout", error); });
         supabase
           .from("exercise_state")
-          .upsert(updatedState.map((s) => ({ id: s.id, history: s.history, pb: s.pb, updated_at: new Date().toISOString() })))
+          .upsert(
+            updatedState.map((s) => ({ user_id: userId, id: s.id, history: s.history, pb: s.pb, updated_at: new Date().toISOString() })),
+            { onConflict: "user_id,id" }
+          )
           .then(({ error }) => { if (error) console.error("Failed to save exercise history/PB", error); });
       }
     }
@@ -663,6 +685,37 @@ export default function WorkingSet() {
     setChanging(false);
     setAddSheet(false);
     setCopied(false);
+  };
+
+  const sendMagicLink = async () => {
+    const email = authEmail.trim();
+    if (!email) return;
+    setAuthSending(true);
+    setAuthError("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.origin },
+    });
+    setAuthSending(false);
+    if (error) setAuthError(error.message);
+    else setAuthSent(true);
+  };
+
+  // Clears this account's data out of local state before the next
+  // useEffect run picks up whoever signs in next, so there's no flash
+  // of one person's history while the other's session is loading.
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    setScreen("setup");
+    setExDb(EX);
+    setGroupLists(INITIAL_LISTS);
+    setHistory([]);
+    setRestOn(false);
+    setSelectedGroups([]);
+    setPicked([]);
+    setPlan([]);
+    setLogs({});
+    setLoading(true);
   };
 
   // ——— shared bits ———
@@ -801,6 +854,77 @@ export default function WorkingSet() {
     );
   };
 
+  // ————————————————— AUTH —————————————————
+  if (isSupabaseConfigured && session === undefined) {
+    return (
+      <div style={{ ...page, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <p style={{ color: C.dust, fontWeight: 700, fontSize: 14 }}>Loading…</p>
+      </div>
+    );
+  }
+
+  if (isSupabaseConfigured && session === null) {
+    return (
+      <div style={page}>
+        <style>{css}</style>
+        <div className="max-w-md mx-auto px-5 pt-8 pb-10" style={{ minHeight: "100dvh", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+          <p style={{ color: C.dust, fontWeight: 700, fontSize: 11, letterSpacing: "0.14em", textTransform: "uppercase" }}>Working Set</p>
+          <TickAccent />
+          <h1 style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
+            {authSent ? "Check your email" : "Sign in to your workouts"}
+          </h1>
+          {authSent ? (
+            <>
+              <p className="mt-2" style={{ color: C.dust, fontSize: 15, lineHeight: 1.5 }}>
+                We sent a sign-in link to <span style={{ color: C.chalk, fontWeight: 700 }}>{authEmail.trim()}</span>. Open it on this device to continue.
+              </p>
+              <button
+                className="ws-press mt-5"
+                style={{ ...btnQuiet, width: "100%" }}
+                onClick={() => { setAuthSent(false); setAuthError(""); }}
+              >
+                Use a different email
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="mt-2" style={{ color: C.dust, fontSize: 15 }}>
+                Your history and personal bests are private to you. Enter your email and we'll send a link — no password to remember.
+              </p>
+              <div className="mt-5">
+                <input
+                  type="email"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") sendMagicLink(); }}
+                  placeholder="you@email.com"
+                  aria-label="Email address"
+                  style={inputStyle}
+                />
+              </div>
+              {authError && (
+                <p className="mt-2" style={{ color: "#E06B5C", fontSize: 13, fontWeight: 600 }}>{authError}</p>
+              )}
+              <div className="mt-4">
+                <button
+                  className="ws-press"
+                  style={btnPrimary(!!authEmail.trim() && !authSending)}
+                  disabled={!authEmail.trim() || authSending}
+                  onClick={sendMagicLink}
+                >
+                  {authSending ? "Sending…" : "Send magic link"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div style={{ ...page, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -816,7 +940,17 @@ export default function WorkingSet() {
         <style>{css}</style>
         <div className="max-w-md mx-auto h-full px-5 pt-3 pb-3 flex flex-col">
           <div className="flex items-center justify-between">
-            <p style={{ color: C.dust, fontWeight: 700, letterSpacing: "0.14em", fontSize: 11, textTransform: "uppercase" }}>Working Set</p>
+            <span className="flex items-center gap-2">
+              <p style={{ color: C.dust, fontWeight: 700, letterSpacing: "0.14em", fontSize: 11, textTransform: "uppercase" }}>Working Set</p>
+              {isSupabaseConfigured && session && (
+                <button
+                  onClick={signOut}
+                  style={{ background: "none", border: "none", color: C.dust, fontSize: 11, textDecoration: "underline", cursor: "pointer", padding: 0 }}
+                >
+                  Sign out
+                </button>
+              )}
+            </span>
             <button
               onClick={() => setScreen("history")}
               className="ws-press"
