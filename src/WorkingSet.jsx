@@ -646,11 +646,19 @@ export default function WorkingSet() {
   };
 
   // ——— shared bits ———
+  // viewport-fit=cover lets the floor color bleed under the iOS status bar
+  // and home indicator for a full-bleed look; these insets push actual
+  // content (and fixed overlays below) clear of both so nothing sits
+  // under the clock/battery icons or gets clipped by the home indicator.
+  // Zero on desktop/Android — env() resolves to 0 with no safe-area support.
   const page = {
     minHeight: "100dvh",
     background: C.floor,
     color: C.chalk,
     fontFamily: "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+    boxSizing: "border-box",
+    paddingTop: "env(safe-area-inset-top)",
+    paddingBottom: "env(safe-area-inset-bottom)",
   };
   const btnPrimary = (enabled = true) => ({
     background: enabled ? C.cobalt : C.raised,
@@ -942,7 +950,7 @@ export default function WorkingSet() {
         </div>
 
         {/* sticky footer */}
-        <div className="fixed inset-x-0 bottom-0 z-40 px-4 pb-4 pt-3" style={{ background: C.floor, borderTop: `1px solid ${C.line}` }}>
+        <div className="fixed inset-x-0 bottom-0 z-40 px-4 pt-3" style={{ background: C.floor, borderTop: `1px solid ${C.line}`, paddingBottom: "calc(env(safe-area-inset-bottom) + 16px)" }}>
           <div className="max-w-md mx-auto">
             <button className="ws-press" style={btnPrimary(count > 0)} disabled={count === 0} onClick={startWorkout}>
               {count === 0 ? "Pick at least one exercise" : `Start workout (${count} exercise${count === 1 ? "" : "s"})`}
@@ -1134,7 +1142,7 @@ export default function WorkingSet() {
         {/* change / add exercise sheet */}
         {sheetOpen && (
           <div className="fixed inset-0 z-50 overflow-y-auto" style={{ background: C.floor }}>
-            <div className="max-w-md mx-auto px-5 pt-6 pb-16">
+            <div className="max-w-md mx-auto px-5" style={{ paddingTop: "calc(env(safe-area-inset-top) + 24px)", paddingBottom: "calc(env(safe-area-inset-bottom) + 64px)" }}>
               <div className="flex items-center justify-between">
                 <h2 style={{ fontSize: 22, fontWeight: 800 }}>{addSheet ? "Add an exercise" : "Change exercise"}</h2>
                 <button onClick={closeSheet} className="ws-press" style={{ ...btnQuiet, minHeight: 40, padding: "0 16px" }}>
@@ -1203,7 +1211,7 @@ export default function WorkingSet() {
 
         {/* rest timer */}
         {restEnds !== null && !sheetOpen && (
-          <div className="fixed inset-x-0 bottom-0 z-50 px-4 pb-4" role="status">
+          <div className="fixed inset-x-0 bottom-0 z-50 px-4" style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 16px)" }} role="status">
             <div className="max-w-md mx-auto p-5" style={{ background: restDone ? C.sageDim : C.amberDim, border: `1px solid ${restDone ? C.sage : C.amber}`, borderRadius: 18, boxShadow: "0 -6px 30px rgba(0,0,0,.5)" }}>
               {restDone ? (
                 <p className="text-center" style={{ color: C.sage, fontWeight: 800, fontSize: 24 }}>Rest done. Go.</p>
