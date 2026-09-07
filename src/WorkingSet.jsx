@@ -383,7 +383,7 @@ export default function WorkingSet() {
   const [authEmail, setAuthEmail] = useState("");
   const [authSending, setAuthSending] = useState(false);
   const [authSent, setAuthSent] = useState(false);
-  const [authCode, setAuthCode] = useState("");
+  const [authLink, setAuthLink] = useState("");
   const [authVerifying, setAuthVerifying] = useState(false);
   const [authError, setAuthError] = useState("");
 
@@ -689,11 +689,6 @@ export default function WorkingSet() {
     setCopied(false);
   };
 
-  // Sends both a link and a 6-digit code (same email). The link only ever
-  // opens in Safari, not an installed home-screen app — iOS runs those in
-  // a separate storage context, so a Safari session doesn't carry over.
-  // The code sidesteps that entirely: read it in Mail, type it back into
-  // the app itself, no cross-app handoff involved.
   const sendCode = async () => {
     const email = authEmail.trim();
     if (!email) return;
@@ -708,13 +703,29 @@ export default function WorkingSet() {
     else setAuthSent(true);
   };
 
-  const verifyCode = async () => {
-    const email = authEmail.trim();
-    const token = authCode.trim();
-    if (!email || !token) return;
-    setAuthVerifying(true);
+  // The emailed link only ever opens in Safari — never an installed
+  // home-screen app, and iOS keeps those in separate storage, so a
+  // session made in Safari doesn't carry over. Rather than tapping it,
+  // copy the link and paste it here: the link's URL carries a
+  // verification token we can redeem directly, without ever leaving
+  // the app. (Showing a plain typed code instead would need a custom
+  // email template, which Supabase gates behind custom SMTP.)
+  const verifyLink = async () => {
     setAuthError("");
-    const { error } = await supabase.auth.verifyOtp({ email, token, type: "email" });
+    let token, type;
+    try {
+      const url = new URL(authLink.trim());
+      token = url.searchParams.get("token") || url.searchParams.get("token_hash");
+      type = url.searchParams.get("type") || "email";
+    } catch {
+      // not a URL at all
+    }
+    if (!token) {
+      setAuthError("That doesn't look like the sign-in link — copy the full link from the email (long-press it, then Copy Link) and paste it here.");
+      return;
+    }
+    setAuthVerifying(true);
+    const { error } = await supabase.auth.verifyOtp({ token_hash: token, type });
     setAuthVerifying(false);
     if (error) setAuthError(error.message);
     // on success, onAuthStateChange fires and updates `session` automatically
@@ -890,45 +901,45 @@ export default function WorkingSet() {
           <p style={{ color: C.dust, fontWeight: 700, fontSize: 11, letterSpacing: "0.14em", textTransform: "uppercase" }}>Working Set</p>
           <TickAccent />
           <h1 style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
-            {authSent ? "Enter your code" : "Sign in to your workouts"}
+            {authSent ? "Paste your sign-in link" : "Sign in to your workouts"}
           </h1>
           {authSent ? (
             <>
               <p className="mt-2" style={{ color: C.dust, fontSize: 15, lineHeight: 1.5 }}>
-                We sent a 6-digit code to <span style={{ color: C.chalk, fontWeight: 700 }}>{authEmail.trim()}</span>. Type it below — no need to leave this app.
+                We sent a link to <span style={{ color: C.chalk, fontWeight: 700 }}>{authEmail.trim()}</span>. In Mail, <strong style={{ color: C.chalk }}>long-press the link and choose Copy Link</strong> — don't tap it, that opens Safari instead. Then paste it below.
               </p>
               <div className="mt-5">
                 <input
                   type="text"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
+                  inputMode="url"
+                  autoComplete="off"
                   autoCapitalize="none"
                   autoCorrect="off"
-                  value={authCode}
-                  onChange={(e) => setAuthCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  onKeyDown={(e) => { if (e.key === "Enter") verifyCode(); }}
-                  placeholder="123456"
-                  aria-label="6-digit code"
-                  style={{ ...inputStyle, fontSize: 24, fontWeight: 700, letterSpacing: "0.3em", textAlign: "center" }}
+                  value={authLink}
+                  onChange={(e) => setAuthLink(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") verifyLink(); }}
+                  placeholder="Paste link here"
+                  aria-label="Sign-in link"
+                  style={inputStyle}
                 />
               </div>
               {authError && (
-                <p className="mt-2" style={{ color: "#E06B5C", fontSize: 13, fontWeight: 600 }}>{authError}</p>
+                <p className="mt-2" style={{ color: "#E06B5C", fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>{authError}</p>
               )}
               <div className="mt-4">
                 <button
                   className="ws-press"
-                  style={btnPrimary(authCode.length === 6 && !authVerifying)}
-                  disabled={authCode.length !== 6 || authVerifying}
-                  onClick={verifyCode}
+                  style={btnPrimary(!!authLink.trim() && !authVerifying)}
+                  disabled={!authLink.trim() || authVerifying}
+                  onClick={verifyLink}
                 >
-                  {authVerifying ? "Checking…" : "Verify code"}
+                  {authVerifying ? "Checking…" : "Continue"}
                 </button>
               </div>
               <button
                 className="ws-press mt-3"
                 style={{ ...btnQuiet, width: "100%" }}
-                onClick={() => { setAuthSent(false); setAuthCode(""); setAuthError(""); }}
+                onClick={() => { setAuthSent(false); setAuthLink(""); setAuthError(""); }}
               >
                 Use a different email
               </button>
@@ -936,7 +947,7 @@ export default function WorkingSet() {
           ) : (
             <>
               <p className="mt-2" style={{ color: C.dust, fontSize: 15 }}>
-                Your history and personal bests are private to you. Enter your email and we'll send a 6-digit code — no password to remember.
+                Your history and personal bests are private to you. Enter your email and we'll send a sign-in link — no password to remember.
               </p>
               <div className="mt-5">
                 <input
@@ -962,7 +973,7 @@ export default function WorkingSet() {
                   disabled={!authEmail.trim() || authSending}
                   onClick={sendCode}
                 >
-                  {authSending ? "Sending…" : "Send code"}
+                  {authSending ? "Sending…" : "Send link"}
                 </button>
               </div>
             </>
