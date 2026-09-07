@@ -669,11 +669,13 @@ export default function WorkingSet() {
     setScreen("summary");
   };
 
-  const advance = () => {
-    setRestEnds(null);
-    if (idx >= plan.length - 1) finish(plan);
-    else setIdx((i) => i + 1);
-  };
+  // Free navigation between exercises (supersets: log a set on one, move
+  // to another, come back) rather than a forced linear march. Arrows, not
+  // swipe - the weight/minutes scroller already owns horizontal swipe on
+  // this screen, and a second competing gesture would be ambiguous,
+  // especially with sweaty hands.
+  const goPrev = () => { setRestEnds(null); setIdx((i) => Math.max(0, i - 1)); };
+  const goNext = () => { setRestEnds(null); setIdx((i) => Math.min(plan.length - 1, i + 1)); };
 
   const doSwap = (newId) => {
     setChanging(false);
@@ -1233,7 +1235,10 @@ export default function WorkingSet() {
     // generous headroom, at 1-unit resolution.
     const rCeil = isCardio ? Math.max(ex.max, 45) + 15 : Math.max(ex.max, ex.pb ?? 0) + 100;
     const lifting = firstSetAt ? Math.max(0, Math.floor((now - firstSetAt) / 1000)) : null;
-    const isLast = idx === plan.length - 1;
+    // With free navigation there's no single fixed "last" exercise anymore,
+    // so Finish is available from anywhere - gated only on whether anything
+    // in the whole plan has been logged, not just the exercise on screen.
+    const anyLogged = plan.some((pid) => (logs[pid] || []).length > 0);
     const sheetOpen = changing || addSheet;
 
     return (
@@ -1259,9 +1264,27 @@ export default function WorkingSet() {
 
         <div className="max-w-md mx-auto px-5 pt-2" style={{ paddingBottom: restEnds !== null && !sheetOpen ? 170 : 14 }}>
           <div className="flex items-center justify-between">
-            <p style={{ color: C.dust, fontSize: 13, fontWeight: 600 }}>
-              Exercise {idx + 1} of {plan.length}
-            </p>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={goPrev}
+                disabled={idx === 0}
+                aria-label="Previous exercise"
+                style={{ background: "none", border: "none", color: C.dust, fontSize: 20, fontWeight: 700, cursor: idx === 0 ? "default" : "pointer", opacity: idx === 0 ? 0.3 : 1, minHeight: 44, minWidth: 32, padding: 0 }}
+              >
+                ‹
+              </button>
+              <p style={{ color: C.dust, fontSize: 13, fontWeight: 600 }}>
+                Exercise {idx + 1} of {plan.length}
+              </p>
+              <button
+                onClick={goNext}
+                disabled={idx === plan.length - 1}
+                aria-label="Next exercise"
+                style={{ background: "none", border: "none", color: C.dust, fontSize: 20, fontWeight: 700, cursor: idx === plan.length - 1 ? "default" : "pointer", opacity: idx === plan.length - 1 ? 0.3 : 1, minHeight: 44, minWidth: 32, padding: 0 }}
+              >
+                ›
+              </button>
+            </div>
             <div className="flex items-center gap-3">
               {lifting != null && (
                 <span className="tabular-nums" style={{ color: C.dust, fontSize: 13, fontWeight: 700 }}>{fmtClock(lifting)}</span>
@@ -1426,19 +1449,19 @@ export default function WorkingSet() {
           <div className="mt-2 flex items-center gap-3">
             <button
               className="ws-press flex-1"
-              style={{ ...btnQuiet, minHeight: 48, opacity: sets.length ? 1 : 0.5 }}
-              onClick={advance}
-              disabled={!sets.length}
+              style={{ ...btnQuiet, minHeight: 48, opacity: anyLogged ? 1 : 0.5 }}
+              onClick={() => finish(plan)}
+              disabled={!anyLogged}
             >
-              {isLast ? "Finish workout" : "Next exercise"}
+              Finish workout
             </button>
-            {!sets.length && (
+            {idx < plan.length - 1 && (
               <button
                 className="ws-press"
                 style={{ background: "none", border: "none", color: C.dust, fontWeight: 600, cursor: "pointer", minHeight: 48, minWidth: 48, padding: "0 12px" }}
-                onClick={advance}
+                onClick={goNext}
               >
-                Skip
+                Next ›
               </button>
             )}
           </div>
