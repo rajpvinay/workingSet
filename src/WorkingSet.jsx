@@ -689,7 +689,8 @@ export default function WorkingSet() {
     setCopied(false);
   };
 
-  // Sends both a link and a 6-digit code (same email). The link only ever
+  // Sends both a link and a numeric code (same email; length is whatever
+  // the email template's {{ .Token }} renders). The link only ever
   // opens in Safari, not an installed home-screen app — iOS runs those in
   // a separate storage context, so a Safari session doesn't carry over.
   // The code sidesteps that entirely: read it in Mail, type it back into
@@ -895,7 +896,7 @@ export default function WorkingSet() {
           {authSent ? (
             <>
               <p className="mt-2" style={{ color: C.dust, fontSize: 15, lineHeight: 1.5 }}>
-                We sent a 6-digit code to <span style={{ color: C.chalk, fontWeight: 700 }}>{authEmail.trim()}</span>. Type it below — no need to leave this app.
+                We sent a code to <span style={{ color: C.chalk, fontWeight: 700 }}>{authEmail.trim()}</span>. Type it below — no need to leave this app.
               </p>
               <div className="mt-5">
                 <input
@@ -905,10 +906,10 @@ export default function WorkingSet() {
                   autoCapitalize="none"
                   autoCorrect="off"
                   value={authCode}
-                  onChange={(e) => setAuthCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  onChange={(e) => setAuthCode(e.target.value.replace(/\D/g, ""))}
                   onKeyDown={(e) => { if (e.key === "Enter") verifyCode(); }}
-                  placeholder="123456"
-                  aria-label="6-digit code"
+                  placeholder="Enter code"
+                  aria-label="Sign-in code"
                   style={{ ...inputStyle, fontSize: 24, fontWeight: 700, letterSpacing: "0.3em", textAlign: "center" }}
                 />
               </div>
@@ -918,8 +919,8 @@ export default function WorkingSet() {
               <div className="mt-4">
                 <button
                   className="ws-press"
-                  style={btnPrimary(authCode.length === 6 && !authVerifying)}
-                  disabled={authCode.length !== 6 || authVerifying}
+                  style={btnPrimary(authCode.length >= 4 && !authVerifying)}
+                  disabled={authCode.length < 4 || authVerifying}
                   onClick={verifyCode}
                 >
                   {authVerifying ? "Checking…" : "Verify code"}
@@ -936,7 +937,7 @@ export default function WorkingSet() {
           ) : (
             <>
               <p className="mt-2" style={{ color: C.dust, fontSize: 15 }}>
-                Your history and personal bests are private to you. Enter your email and we'll send a 6-digit code — no password to remember.
+                Your history and personal bests are private to you. Enter your email and we'll send a code — no password to remember.
               </p>
               <div className="mt-5">
                 <input
