@@ -54,6 +54,7 @@ const GROUP_DEFS = [
       ["Straight-arm pulldown", 20, 100, 5, 50, 12, 60, ["Soft elbows, locked in place", "Sweep the bar to your thighs"]],
       ["Deadlift", 95, 405, 5, 185, 6, 180, ["Bar over mid-foot, lats tight", "Push the floor away", "Lock out with glutes, don't lean back"]],
       ["Weighted back extension", 10, 90, 5, 25, 12, 60, ["Hinge at hips, not lower back", "Squeeze glutes at the top"]],
+      ["Pull-up", 0, 90, 5, 0, 8, 120, ["Dead hang start, shoulder blades down", "Pull your chin over the bar", "Control the descent, don't drop"]],
     ],
   },
   {
@@ -69,6 +70,7 @@ const GROUP_DEFS = [
       ["Pec deck", 10, 200, 5, 90, 12, 60, ["Elbows slightly below shoulders", "Open slowly, feel the stretch"]],
       ["Dumbbell fly", 10, 60, 5, 30, 12, 60, ["Soft elbows locked throughout", "Stop at chest level on the way down"]],
       ["Decline barbell press", 45, 275, 5, 125, 8, 120, ["Grip slightly wider than flat bench", "Touch the lower chest, drive up"]],
+      ["Push-up", 0, 90, 5, 0, 15, 75, ["Straight line from head to heels", "Elbows at 45, not flared out", "Full lockout at the top"]],
     ],
   },
   {
@@ -84,6 +86,7 @@ const GROUP_DEFS = [
       ["Rear-delt fly", 5, 60, 5, 25, 12, 60, ["Hinge forward, chest proud", "Lead with elbows out wide"]],
       ["Face pull", 10, 80, 5, 40, 15, 60, ["Pull the rope to your forehead", "End with thumbs pointing back"]],
       ["Cable upright row", 20, 100, 5, 50, 10, 75, ["Elbows above wrists always", "Pull to chest height, not chin"]],
+      ["Barbell shrug", 45, 315, 10, 135, 12, 75, ["Lift straight up, don't roll your shoulders", "Pause and squeeze at the top", "Control the weight back down"]],
     ],
   },
   {
@@ -110,6 +113,7 @@ const GROUP_DEFS = [
       ["Single-arm pushdown", 5, 50, 5, 20, 12, 45, ["Square hips and shoulders", "Turn the palm down at lockout"]],
       ["Dumbbell kickback", 5, 40, 5, 15, 12, 45, ["Upper arm parallel to the floor", "Lock out fully, pause a beat"]],
       ["Machine dip", 20, 200, 10, 90, 10, 75, ["Shoulders down away from ears", "Lean slightly forward, press through"]],
+      ["Bench dip", 0, 45, 5, 0, 15, 60, ["Hands close on the bench edge", "Lower until upper arms are level", "Keep elbows tracking straight back"]],
     ],
   },
   {
@@ -139,6 +143,7 @@ const GROUP_DEFS = [
       ["Weighted Russian twist", 10, 60, 5, 25, 20, 45, ["Lean back, chest up", "Rotate shoulders, not just arms"]],
       ["Torso rotation machine", 20, 140, 5, 60, 15, 45, ["Slow and controlled both ways", "Keep hips locked forward"]],
       ["Weighted decline sit-up", 10, 70, 5, 25, 15, 60, ["Hug the plate to your chest", "Lower slow, no flopping"]],
+      ["Hanging leg raise", 0, 45, 5, 0, 12, 60, ["Curl your pelvis, don't just swing your legs", "Control the lowering, no momentum"]],
     ],
   },
   {
@@ -149,6 +154,7 @@ const GROUP_DEFS = [
       ["Rowing machine", 5, 30, 1, 15, ["Legs, then body, then arms", "Damper low, smooth strokes"]],
       ["Elliptical", 5, 40, 1, 20, ["Push and pull the handles", "Steady cadence throughout"]],
       ["Stair climber", 5, 30, 1, 12, ["Light grip, stand tall", "Step with the full foot, not toes"]],
+      ["Treadmill run", 5, 40, 1, 20, ["Steady pace you can hold the whole time", "Land midfoot, relaxed shoulders"]],
     ],
   },
 ];
