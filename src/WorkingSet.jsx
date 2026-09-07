@@ -380,9 +380,13 @@ export default function WorkingSet() {
   // configured, matching the existing no-persistence fallback.
   const [session, setSession] = useState(isSupabaseConfigured ? undefined : null);
   const userId = session?.user?.id ?? null;
-  const [authEmail, setAuthEmail] = useState("");
+  // Persisted through localStorage: requesting a code means leaving the app
+  // to read Mail, and iOS can fully discard a backgrounded tab under memory
+  // pressure — without this, coming back reloads to a blank "enter your
+  // email" screen and forgets a code is already waiting.
+  const [authEmail, setAuthEmail] = useState(() => { try { return localStorage.getItem("ws_authEmail") || ""; } catch { return ""; } });
   const [authSending, setAuthSending] = useState(false);
-  const [authSent, setAuthSent] = useState(false);
+  const [authSent, setAuthSent] = useState(() => { try { return localStorage.getItem("ws_authSent") === "1"; } catch { return false; } });
   const [authCode, setAuthCode] = useState("");
   const [authVerifying, setAuthVerifying] = useState(false);
   const [authError, setAuthError] = useState("");
@@ -394,7 +398,10 @@ export default function WorkingSet() {
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
+      setSession(next);
+      if (next) { try { localStorage.removeItem("ws_authEmail"); localStorage.removeItem("ws_authSent"); } catch {} }
+    });
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -706,7 +713,10 @@ export default function WorkingSet() {
     });
     setAuthSending(false);
     if (error) setAuthError(error.message);
-    else setAuthSent(true);
+    else {
+      setAuthSent(true);
+      try { localStorage.setItem("ws_authEmail", email); localStorage.setItem("ws_authSent", "1"); } catch {}
+    }
   };
 
   const verifyCode = async () => {
@@ -726,6 +736,7 @@ export default function WorkingSet() {
   // of one person's history while the other's session is loading.
   const signOut = async () => {
     await supabase.auth.signOut();
+    try { localStorage.removeItem("ws_authEmail"); localStorage.removeItem("ws_authSent"); } catch {}
     setScreen("setup");
     setExDb(EX);
     setGroupLists(INITIAL_LISTS);
@@ -905,6 +916,7 @@ export default function WorkingSet() {
                   autoComplete="one-time-code"
                   autoCapitalize="none"
                   autoCorrect="off"
+                  autoFocus
                   value={authCode}
                   onChange={(e) => setAuthCode(e.target.value.replace(/\D/g, ""))}
                   onKeyDown={(e) => { if (e.key === "Enter") verifyCode(); }}
@@ -929,7 +941,7 @@ export default function WorkingSet() {
               <button
                 className="ws-press mt-3"
                 style={{ ...btnQuiet, width: "100%" }}
-                onClick={() => { setAuthSent(false); setAuthCode(""); setAuthError(""); }}
+                onClick={() => { setAuthSent(false); setAuthCode(""); setAuthError(""); try { localStorage.removeItem("ws_authSent"); } catch {} }}
               >
                 Use a different email
               </button>
@@ -943,8 +955,10 @@ export default function WorkingSet() {
                 <input
                   type="email"
                   inputMode="email"
+                  autoComplete="email"
                   autoCapitalize="none"
                   autoCorrect="off"
+                  autoFocus
                   value={authEmail}
                   onChange={(e) => setAuthEmail(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") sendCode(); }}
@@ -984,16 +998,16 @@ export default function WorkingSet() {
   // ————————————————— SETUP —————————————————
   if (screen === "setup") {
     return (
-      <div style={{ ...page, height: "100dvh", overflow: "hidden" }}>
+      <div style={page}>
         <style>{css}</style>
-        <div className="max-w-md mx-auto h-full px-5 pt-3 pb-3 flex flex-col">
+        <div className="max-w-md mx-auto px-5 pt-6 pb-8">
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-2">
               <p style={{ color: C.dust, fontWeight: 700, letterSpacing: "0.14em", fontSize: 11, textTransform: "uppercase" }}>Working Set</p>
               {isSupabaseConfigured && session && (
                 <button
                   onClick={signOut}
-                  style={{ background: "none", border: "none", color: C.dust, fontSize: 11, textDecoration: "underline", cursor: "pointer", padding: 0 }}
+                  style={{ background: "none", border: "none", color: C.dust, fontSize: 11, textDecoration: "underline", cursor: "pointer", padding: "8px 0" }}
                 >
                   Sign out
                 </button>
@@ -1007,21 +1021,21 @@ export default function WorkingSet() {
               History
             </button>
           </div>
-          <h1 className="mt-2" style={{ fontSize: 23, fontWeight: 800, lineHeight: 1.15, letterSpacing: "-0.03em" }}>
+          <h1 className="mt-3" style={{ fontSize: 25, fontWeight: 800, lineHeight: 1.15, letterSpacing: "-0.03em" }}>
             What are you <span style={{ color: C.cobalt }}>training</span> today?
           </h1>
-          <p className="mt-1" style={{ color: C.dust, fontSize: 13 }}>
+          <p className="mt-1.5" style={{ color: C.dust, fontSize: 14 }}>
             Pick any combination of muscle groups. You'll choose the exercises yourself next.
           </p>
 
-          <div className="mt-3 grid grid-cols-2 gap-1.5">
+          <div className="mt-5 grid grid-cols-2 gap-2">
             {GROUPS.map((g) => {
               const on = selectedGroups.includes(g.id);
               return (
                 <button
                   key={g.id}
                   onClick={() => toggleGroup(g.id)}
-                  className="ws-press text-left px-3 py-2"
+                  className="ws-press text-left px-3.5 py-3"
                   style={{
                     background: on ? C.raised : C.surface,
                     border: `2px solid ${on ? C.cobalt : C.line}`,
@@ -1042,7 +1056,7 @@ export default function WorkingSet() {
             onClick={toggleRestOn}
             role="switch"
             aria-checked={restOn}
-            className="ws-press mt-2 w-full flex items-center justify-between gap-4 px-3 py-2 text-left"
+            className="ws-press mt-4 w-full flex items-center justify-between gap-4 px-3.5 py-3 text-left"
             style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12, cursor: "pointer", color: C.chalk, minHeight: 48 }}
           >
             <span>
@@ -1056,7 +1070,7 @@ export default function WorkingSet() {
             </span>
           </button>
 
-          <div className="mt-auto pt-2">
+          <div className="mt-6">
             <button className="ws-press" style={{ ...btnPrimary(selectedGroups.length > 0), minHeight: 50 }} disabled={!selectedGroups.length} onClick={() => { setPicked([]); setScreen("pick"); }}>
               Choose exercises
             </button>
@@ -1347,7 +1361,11 @@ export default function WorkingSet() {
               {isLast ? "Finish workout" : "Next exercise"}
             </button>
             {!sets.length && (
-              <button className="ws-press" style={{ background: "none", border: "none", color: C.dust, fontWeight: 600, cursor: "pointer" }} onClick={advance}>
+              <button
+                className="ws-press"
+                style={{ background: "none", border: "none", color: C.dust, fontWeight: 600, cursor: "pointer", minHeight: 48, minWidth: 48, padding: "0 12px" }}
+                onClick={advance}
+              >
                 Skip
               </button>
             )}
@@ -1364,8 +1382,11 @@ export default function WorkingSet() {
         {sheetOpen && (
           <div className="fixed inset-0 z-50 overflow-y-auto" style={{ background: C.floor }}>
             <div className="max-w-md mx-auto px-5" style={{ paddingTop: "calc(env(safe-area-inset-top) + 24px)", paddingBottom: "calc(env(safe-area-inset-bottom) + 64px)" }}>
-              <div className="flex items-center justify-between">
-                <h2 style={{ fontSize: 22, fontWeight: 800 }}>{addSheet ? "Add an exercise" : "Change exercise"}</h2>
+              <div className="flex items-start justify-between">
+                <div>
+                  <TickAccent />
+                  <h2 style={{ fontSize: 22, fontWeight: 800 }}>{addSheet ? "Add an exercise" : "Change exercise"}</h2>
+                </div>
                 <button onClick={closeSheet} className="ws-press" style={{ ...btnQuiet, minHeight: 40, padding: "0 16px" }}>
                   Close
                 </button>
