@@ -383,6 +383,8 @@ export default function WorkingSet() {
   const [authEmail, setAuthEmail] = useState("");
   const [authSending, setAuthSending] = useState(false);
   const [authSent, setAuthSent] = useState(false);
+  const [authCode, setAuthCode] = useState("");
+  const [authVerifying, setAuthVerifying] = useState(false);
   const [authError, setAuthError] = useState("");
 
   const groupsLabel = selectedGroups.map((g) => GROUP_BY_ID[g].label).join(" + ");
@@ -687,7 +689,12 @@ export default function WorkingSet() {
     setCopied(false);
   };
 
-  const sendMagicLink = async () => {
+  // Sends both a link and a 6-digit code (same email). The link only ever
+  // opens in Safari, not an installed home-screen app — iOS runs those in
+  // a separate storage context, so a Safari session doesn't carry over.
+  // The code sidesteps that entirely: read it in Mail, type it back into
+  // the app itself, no cross-app handoff involved.
+  const sendCode = async () => {
     const email = authEmail.trim();
     if (!email) return;
     setAuthSending(true);
@@ -699,6 +706,18 @@ export default function WorkingSet() {
     setAuthSending(false);
     if (error) setAuthError(error.message);
     else setAuthSent(true);
+  };
+
+  const verifyCode = async () => {
+    const email = authEmail.trim();
+    const token = authCode.trim();
+    if (!email || !token) return;
+    setAuthVerifying(true);
+    setAuthError("");
+    const { error } = await supabase.auth.verifyOtp({ email, token, type: "email" });
+    setAuthVerifying(false);
+    if (error) setAuthError(error.message);
+    // on success, onAuthStateChange fires and updates `session` automatically
   };
 
   // Clears this account's data out of local state before the next
@@ -871,17 +890,45 @@ export default function WorkingSet() {
           <p style={{ color: C.dust, fontWeight: 700, fontSize: 11, letterSpacing: "0.14em", textTransform: "uppercase" }}>Working Set</p>
           <TickAccent />
           <h1 style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>
-            {authSent ? "Check your email" : "Sign in to your workouts"}
+            {authSent ? "Enter your code" : "Sign in to your workouts"}
           </h1>
           {authSent ? (
             <>
               <p className="mt-2" style={{ color: C.dust, fontSize: 15, lineHeight: 1.5 }}>
-                We sent a sign-in link to <span style={{ color: C.chalk, fontWeight: 700 }}>{authEmail.trim()}</span>. Open it on this device to continue.
+                We sent a 6-digit code to <span style={{ color: C.chalk, fontWeight: 700 }}>{authEmail.trim()}</span>. Type it below — no need to leave this app.
               </p>
+              <div className="mt-5">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  value={authCode}
+                  onChange={(e) => setAuthCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  onKeyDown={(e) => { if (e.key === "Enter") verifyCode(); }}
+                  placeholder="123456"
+                  aria-label="6-digit code"
+                  style={{ ...inputStyle, fontSize: 24, fontWeight: 700, letterSpacing: "0.3em", textAlign: "center" }}
+                />
+              </div>
+              {authError && (
+                <p className="mt-2" style={{ color: "#E06B5C", fontSize: 13, fontWeight: 600 }}>{authError}</p>
+              )}
+              <div className="mt-4">
+                <button
+                  className="ws-press"
+                  style={btnPrimary(authCode.length === 6 && !authVerifying)}
+                  disabled={authCode.length !== 6 || authVerifying}
+                  onClick={verifyCode}
+                >
+                  {authVerifying ? "Checking…" : "Verify code"}
+                </button>
+              </div>
               <button
-                className="ws-press mt-5"
+                className="ws-press mt-3"
                 style={{ ...btnQuiet, width: "100%" }}
-                onClick={() => { setAuthSent(false); setAuthError(""); }}
+                onClick={() => { setAuthSent(false); setAuthCode(""); setAuthError(""); }}
               >
                 Use a different email
               </button>
@@ -889,7 +936,7 @@ export default function WorkingSet() {
           ) : (
             <>
               <p className="mt-2" style={{ color: C.dust, fontSize: 15 }}>
-                Your history and personal bests are private to you. Enter your email and we'll send a link — no password to remember.
+                Your history and personal bests are private to you. Enter your email and we'll send a 6-digit code — no password to remember.
               </p>
               <div className="mt-5">
                 <input
@@ -899,7 +946,7 @@ export default function WorkingSet() {
                   autoCorrect="off"
                   value={authEmail}
                   onChange={(e) => setAuthEmail(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") sendMagicLink(); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") sendCode(); }}
                   placeholder="you@email.com"
                   aria-label="Email address"
                   style={inputStyle}
@@ -913,9 +960,9 @@ export default function WorkingSet() {
                   className="ws-press"
                   style={btnPrimary(!!authEmail.trim() && !authSending)}
                   disabled={!authEmail.trim() || authSending}
-                  onClick={sendMagicLink}
+                  onClick={sendCode}
                 >
-                  {authSending ? "Sending…" : "Send magic link"}
+                  {authSending ? "Sending…" : "Send code"}
                 </button>
               </div>
             </>
