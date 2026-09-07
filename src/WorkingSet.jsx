@@ -373,6 +373,8 @@ export default function WorkingSet() {
   const [expandedGroup, setExpandedGroup] = useState(null); // other-group accordion in Change/Add sheet
   const [weight, setWeight] = useState(0);
   const [reps, setReps] = useState(10);
+  const [editingSetIdx, setEditingSetIdx] = useState(null); // index into the current exercise's logged sets, or null
+  const [editDraft, setEditDraft] = useState(null); // { w, r } or { min } while editing
   const [firstSetAt, setFirstSetAt] = useState(null);
   const [lastSetAt, setLastSetAt] = useState(null);
   const [now, setNow] = useState(Date.now());
@@ -493,6 +495,8 @@ export default function WorkingSet() {
     const mid = ex.min + Math.round((ex.max - ex.min) / 2 / ex.step) * ex.step;
     setWeight(hasHist ? last(ex.history) : ex.start ?? mid);
     setReps(ex.reps || 10);
+    setEditingSetIdx(null);
+    setEditDraft(null);
   }, [screen, idx, plan]);
 
   const restLeft = restEnds ? Math.max(0, Math.ceil((restEnds - now) / 1000)) : null;
@@ -585,6 +589,32 @@ export default function WorkingSet() {
       [id]: [...(p[id] || []), ex.kind === "cardio" ? { min: weight } : { w: weight, r: reps }],
     }));
     if (restOn && ex.kind !== "cardio" && ex.rest > 0) startRest(ex.rest);
+  };
+
+  // Editing/deleting a logged set is local-only (nothing's written to
+  // Supabase until finish() runs), so these just mutate `logs` directly.
+  const openSetEdit = (i, s) => {
+    setEditingSetIdx(i);
+    setEditDraft("min" in s ? { min: s.min } : { w: s.w, r: s.r });
+  };
+  const cancelSetEdit = () => { setEditingSetIdx(null); setEditDraft(null); };
+  const saveSetEdit = () => {
+    const id = plan[idx];
+    setLogs((p) => {
+      const arr = [...(p[id] || [])];
+      arr[editingSetIdx] = editDraft;
+      return { ...p, [id]: arr };
+    });
+    cancelSetEdit();
+  };
+  const deleteSetEdit = () => {
+    const id = plan[idx];
+    setLogs((p) => {
+      const arr = [...(p[id] || [])];
+      arr.splice(editingSetIdx, 1);
+      return { ...p, [id]: arr };
+    });
+    cancelSetEdit();
   };
 
   // Duration = first logged set to last logged set.
@@ -1349,11 +1379,47 @@ export default function WorkingSet() {
 
           {sets.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {sets.map((s, i) => (
-                <span key={i} className="tabular-nums px-2.5 py-1.5" style={{ background: C.sageDim, color: C.sage, borderRadius: 8, fontWeight: 700, fontSize: 13 }}>
-                  {"min" in s ? `${s.min} min` : `${s.w === 0 ? "BW" : s.w} x ${s.r}`}
-                </span>
-              ))}
+              {sets.map((s, i) =>
+                editingSetIdx === i ? (
+                  <div key={i} className="w-full p-3" style={{ background: C.raised, border: `2px solid ${C.cobalt}`, borderRadius: 12 }}>
+                    {isCardio ? (
+                      <div className="flex items-center justify-center gap-4">
+                        <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 44 }} onClick={() => setEditDraft((d) => ({ min: Math.max(0, d.min - 1) }))} aria-label="Edit set: one less minute">−</button>
+                        <span className="tabular-nums" style={{ fontWeight: 800, fontSize: 20, minWidth: 70, textAlign: "center" }}>{editDraft.min} min</span>
+                        <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 44 }} onClick={() => setEditDraft((d) => ({ min: d.min + 1 }))} aria-label="Edit set: one more minute">+</button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-center gap-5">
+                        <div className="flex items-center gap-2">
+                          <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 44 }} onClick={() => setEditDraft((d) => ({ ...d, w: Math.max(0, d.w - ex.step) }))} aria-label={`Edit set: decrease weight by ${ex.step}`}>−</button>
+                          <span className="tabular-nums" style={{ fontWeight: 800, fontSize: 20, minWidth: 56, textAlign: "center" }}>{editDraft.w === 0 ? "BW" : editDraft.w}</span>
+                          <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 44 }} onClick={() => setEditDraft((d) => ({ ...d, w: Math.min(rCeil, d.w + ex.step) }))} aria-label={`Edit set: increase weight by ${ex.step}`}>+</button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 44 }} onClick={() => setEditDraft((d) => ({ ...d, r: clamp(d.r - 1, 1, 30) }))} aria-label="Edit set: one fewer rep">−</button>
+                          <span className="tabular-nums" style={{ fontWeight: 800, fontSize: 20, minWidth: 40, textAlign: "center" }}>{editDraft.r}</span>
+                          <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 44 }} onClick={() => setEditDraft((d) => ({ ...d, r: clamp(d.r + 1, 1, 30) }))} aria-label="Edit set: one more rep">+</button>
+                        </div>
+                      </div>
+                    )}
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      <button className="ws-press" style={{ ...btnQuiet, minHeight: 44 }} onClick={cancelSetEdit}>Cancel</button>
+                      <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, color: "#E06B5C" }} onClick={deleteSetEdit}>Delete</button>
+                      <button className="ws-press" style={{ ...btnPrimary(true), minHeight: 44 }} onClick={saveSetEdit}>Save</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    key={i}
+                    className="ws-press tabular-nums px-2.5 py-1.5"
+                    style={{ background: C.sageDim, color: C.sage, borderRadius: 8, fontWeight: 700, fontSize: 13, border: "none", cursor: "pointer", minHeight: 32 }}
+                    onClick={() => openSetEdit(i, s)}
+                    aria-label={`Edit set ${i + 1}`}
+                  >
+                    {"min" in s ? `${s.min} min` : `${s.w === 0 ? "BW" : s.w} x ${s.r}`}
+                  </button>
+                )
+              )}
             </div>
           )}
 
