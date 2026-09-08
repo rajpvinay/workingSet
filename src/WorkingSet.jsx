@@ -193,6 +193,32 @@ const todayISO = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
+// Shared by the end-of-workout summary and a past day's history detail —
+// same plain-text recap shape either way.
+const buildRecapText = (label, durMin, totalSets, volume, lines) => [
+  `${label || "Workout"} (Working Set)`,
+  `${durMin} min first set to last, ${totalSets} sets, ${volume.toLocaleString()} lb total volume`,
+  ...lines.map((l) => `${l.name}: ${l.count} set${l.count === 1 ? "" : "s"}, ${l.sets.map(fmtSet).join(", ")}`),
+].join("\n");
+
+// navigator.clipboard needs a secure context (https or localhost); LAN IP
+// testing over plain http on a phone falls back to the legacy textarea copy.
+const copyTextToClipboard = async (text) => {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+  } else {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+  }
+};
+
 
 // Horizontal precision scroller (tape/ruler). Thumb-scroll to a 1-unit
 // value; last-time (grey) and PB (amber) render as ticks you can land on.
@@ -359,8 +385,10 @@ export default function WorkingSet() {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const [histSel, setHistSel] = useState(null);
+  const [confirmDeleteHistory, setConfirmDeleteHistory] = useState(false);
   const [selectedGroups, setSelectedGroups] = useState([]);
   const [restOn, setRestOn] = useState(false);
+  const [restSeconds, setRestSecondsState] = useState(90); // user's own default rest duration, overriding each exercise's built-in suggestion
   const [picked, setPicked] = useState([]);
   const [addingFor, setAddingFor] = useState(null);
   const [newName, setNewName] = useState("");
@@ -467,11 +495,14 @@ export default function WorkingSet() {
 
         if (workoutsRes.data?.length) {
           setHistory(workoutsRes.data.map((row) => ({
-            date: row.date, groups: row.groups, durMin: row.dur_min, entries: row.entries,
+            id: row.id, date: row.date, groups: row.groups, durMin: row.dur_min, entries: row.entries,
           })));
         }
 
-        if (settingsRes.data) setRestOn(!!settingsRes.data.rest_on);
+        if (settingsRes.data) {
+          setRestOn(!!settingsRes.data.rest_on);
+          if (settingsRes.data.rest_seconds != null) setRestSecondsState(settingsRes.data.rest_seconds);
+        }
       } catch (err) {
         console.error("Failed to load from Supabase", err);
       } finally {
@@ -486,6 +517,8 @@ export default function WorkingSet() {
     const t = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(t);
   }, [screen]);
+
+  useEffect(() => { setConfirmDeleteHistory(false); }, [histSel]);
 
   useEffect(() => {
     if (screen !== "workout" || !plan.length) return;
@@ -524,6 +557,17 @@ export default function WorkingSet() {
       }
       return next;
     });
+  };
+
+  const setRestSeconds = (sec) => {
+    const next = clamp(sec, 15, 300);
+    setRestSecondsState(next);
+    if (isSupabaseConfigured && userId) {
+      supabase
+        .from("settings")
+        .upsert({ user_id: userId, rest_seconds: next })
+        .then(({ error }) => { if (error) console.error("Failed to save rest duration", error); });
+    }
   };
 
   const lastDoneIn = (gid) => {
@@ -588,7 +632,7 @@ export default function WorkingSet() {
       ...p,
       [id]: [...(p[id] || []), ex.kind === "cardio" ? { min: weight } : { w: weight, r: reps }],
     }));
-    if (restOn && ex.kind !== "cardio" && ex.rest > 0) startRest(ex.rest);
+    if (restOn && ex.kind !== "cardio") startRest(restSeconds);
   };
 
   // Editing/deleting a logged set is local-only (nothing's written to
@@ -638,7 +682,10 @@ export default function WorkingSet() {
     if (entries.length) {
       const date = todayISO();
       const groups = [...selectedGroups];
-      setHistory((h) => [{ date, groups, durMin, entries }, ...h]);
+      // id starts null and is filled in once the insert below resolves —
+      // kept as the same object reference so that update can find it.
+      const localEntry = { id: null, date, groups, durMin, entries };
+      setHistory((h) => [localEntry, ...h]);
       let updatedState = [];
       setExDb((db) => {
         const nd = { ...db };
@@ -656,7 +703,12 @@ export default function WorkingSet() {
         supabase
           .from("workouts")
           .insert({ user_id: userId, date, groups, dur_min: durMin, entries })
-          .then(({ error }) => { if (error) console.error("Failed to save workout", error); });
+          .select()
+          .single()
+          .then(({ data, error }) => {
+            if (error) { console.error("Failed to save workout", error); return; }
+            setHistory((h) => h.map((e) => (e === localEntry ? { ...e, id: data.id } : e)));
+          });
         supabase
           .from("exercise_state")
           .upsert(
@@ -769,6 +821,19 @@ export default function WorkingSet() {
     // on success, onAuthStateChange fires and updates `session` automatically
   };
 
+  const deleteWorkout = (entry) => {
+    setHistory((h) => h.filter((e) => e !== entry));
+    if (isSupabaseConfigured && userId && entry.id) {
+      supabase
+        .from("workouts")
+        .delete()
+        .eq("id", entry.id)
+        .then(({ error }) => { if (error) console.error("Failed to delete workout", error); });
+    }
+    setHistSel(null);
+    setScreen("history");
+  };
+
   // Clears this account's data out of local state before the next
   // useEffect run picks up whoever signs in next, so there's no flash
   // of one person's history while the other's session is loading.
@@ -825,6 +890,21 @@ export default function WorkingSet() {
     fontWeight: 600,
     border: `1px solid ${C.line}`,
     cursor: "pointer",
+  };
+  // Compact pill for secondary top-of-screen actions (Skip/Add/Change) -
+  // narrow width, but still a full 48px tall tap target.
+  const btnPillSmall = {
+    background: "none",
+    border: `1px solid ${C.line}`,
+    color: C.chalk,
+    borderRadius: 10,
+    padding: "0 10px",
+    fontWeight: 700,
+    cursor: "pointer",
+    fontSize: 12,
+    minHeight: 48,
+    display: "inline-flex",
+    alignItems: "center",
   };
   const inputStyle = {
     width: "100%",
@@ -1108,6 +1188,17 @@ export default function WorkingSet() {
             </span>
           </button>
 
+          {restOn && (
+            <div className="mt-2 flex items-center justify-between gap-4 px-3.5 py-3" style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 }}>
+              <span style={{ fontWeight: 700, fontSize: 13 }}>Rest duration</span>
+              <div className="flex items-center gap-3">
+                <button className="ws-press" style={{ ...btnQuiet, minHeight: 40, width: 40, padding: 0 }} onClick={() => setRestSeconds(restSeconds - 15)} aria-label="15 seconds less">−</button>
+                <span className="tabular-nums" style={{ fontWeight: 800, fontSize: 16, minWidth: 44, textAlign: "center" }}>{fmtClock(restSeconds)}</span>
+                <button className="ws-press" style={{ ...btnQuiet, minHeight: 40, width: 40, padding: 0 }} onClick={() => setRestSeconds(restSeconds + 15)} aria-label="15 seconds more">+</button>
+              </div>
+            </div>
+          )}
+
           <div className="mt-6">
             <button className="ws-press" style={{ ...btnPrimary(selectedGroups.length > 0), minHeight: 50 }} disabled={!selectedGroups.length} onClick={() => { setPicked([]); setScreen("pick"); }}>
               Choose exercises
@@ -1125,7 +1216,7 @@ export default function WorkingSet() {
       <div style={page}>
         <style>{css}</style>
         <div className="max-w-md mx-auto px-5 pt-8" style={{ paddingBottom: 130 }}>
-          <button onClick={() => setScreen("setup")} style={{ background: "none", border: "none", color: C.dust, fontWeight: 600, cursor: "pointer", padding: 0 }}>
+          <button onClick={() => setScreen("setup")} style={{ background: "none", border: `1px solid ${C.line}`, color: C.chalk, borderRadius: 10, padding: "8px 14px", fontWeight: 700, cursor: "pointer", fontSize: 13, minHeight: 44, display: "inline-flex", alignItems: "center" }}>
             Back
           </button>
           <div className="mt-3"><TickAccent /></div>
@@ -1295,17 +1386,17 @@ export default function WorkingSet() {
             </div>
           </div>
 
-          <p className="mt-2" style={{ color: C.dust, fontSize: 12, fontWeight: 700 }}>{grp.label}</p>
-          <div className="mt-0.5 flex items-center justify-between gap-3">
-            <h1 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>{ex.name}</h1>
-            <button
-              onClick={openChange}
-              className="ws-press"
-              style={{ background: "none", border: `1px solid ${C.line}`, color: C.chalk, borderRadius: 10, padding: "5px 10px", fontWeight: 700, cursor: "pointer", fontSize: 12, flexShrink: 0 }}
-            >
-              Change
-            </button>
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <p style={{ color: C.dust, fontSize: 12, fontWeight: 700 }}>{grp.label}</p>
+            <div className="flex items-center gap-1.5" style={{ flexShrink: 0 }}>
+              {idx < plan.length - 1 && (
+                <button onClick={goNext} className="ws-press" style={btnPillSmall}>Skip</button>
+              )}
+              <button onClick={openAdd} className="ws-press" style={btnPillSmall}>Add</button>
+              <button onClick={openChange} className="ws-press" style={btnPillSmall}>Change</button>
+            </div>
           </div>
+          <h1 className="mt-0.5" style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>{ex.name}</h1>
 
           <div className="mt-1 flex items-center gap-3">
             <div>
@@ -1394,8 +1485,8 @@ export default function WorkingSet() {
 
           {!restOn && !isCardio && restEnds === null && (
             <div className="mt-1.5">
-              <button className="ws-press" style={{ ...btnQuiet, width: "100%" }} onClick={() => startRest(ex.rest)}>
-                Start rest timer ({fmtClock(ex.rest)})
+              <button className="ws-press" style={{ ...btnQuiet, width: "100%" }} onClick={() => startRest(restSeconds)}>
+                Start rest timer ({fmtClock(restSeconds)})
               </button>
             </div>
           )}
@@ -1408,20 +1499,35 @@ export default function WorkingSet() {
                     {isCardio ? (
                       <div className="flex items-center justify-center gap-4">
                         <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 44 }} onClick={() => setEditDraft((d) => ({ min: Math.max(0, d.min - 1) }))} aria-label="Edit set: one less minute">−</button>
-                        <span className="tabular-nums" style={{ fontWeight: 800, fontSize: 20, minWidth: 70, textAlign: "center" }}>{editDraft.min} min</span>
+                        <input
+                          type="number" inputMode="numeric" aria-label="Edit set: minutes"
+                          className="tabular-nums" style={{ ...inputStyle, fontWeight: 800, fontSize: 20, width: 80, textAlign: "center", padding: "8px 4px" }}
+                          value={editDraft.min}
+                          onChange={(e) => { const v = parseInt(e.target.value, 10); setEditDraft({ min: Number.isFinite(v) ? Math.max(0, v) : 0 }); }}
+                        />
                         <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 44 }} onClick={() => setEditDraft((d) => ({ min: d.min + 1 }))} aria-label="Edit set: one more minute">+</button>
                       </div>
                     ) : (
-                      <div className="flex items-center justify-center gap-5">
+                      <div className="flex items-center justify-center gap-4">
                         <div className="flex items-center gap-2">
-                          <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 44 }} onClick={() => setEditDraft((d) => ({ ...d, w: Math.max(0, d.w - ex.step) }))} aria-label={`Edit set: decrease weight by ${ex.step}`}>−</button>
-                          <span className="tabular-nums" style={{ fontWeight: 800, fontSize: 20, minWidth: 56, textAlign: "center" }}>{editDraft.w === 0 ? "BW" : editDraft.w}</span>
-                          <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 44 }} onClick={() => setEditDraft((d) => ({ ...d, w: Math.min(rCeil, d.w + ex.step) }))} aria-label={`Edit set: increase weight by ${ex.step}`}>+</button>
+                          <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 40 }} onClick={() => setEditDraft((d) => ({ ...d, w: Math.max(0, d.w - ex.step) }))} aria-label={`Edit set: decrease weight by ${ex.step}`}>−</button>
+                          <input
+                            type="number" inputMode="numeric" aria-label="Edit set: weight in pounds"
+                            className="tabular-nums" style={{ ...inputStyle, fontWeight: 800, fontSize: 20, width: 72, textAlign: "center", padding: "8px 4px" }}
+                            value={editDraft.w}
+                            onChange={(e) => { const v = parseInt(e.target.value, 10); setEditDraft((d) => ({ ...d, w: Number.isFinite(v) ? clamp(v, 0, rCeil) : 0 })); }}
+                          />
+                          <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 40 }} onClick={() => setEditDraft((d) => ({ ...d, w: Math.min(rCeil, d.w + ex.step) }))} aria-label={`Edit set: increase weight by ${ex.step}`}>+</button>
                         </div>
                         <div className="flex items-center gap-2">
-                          <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 44 }} onClick={() => setEditDraft((d) => ({ ...d, r: clamp(d.r - 1, 1, 30) }))} aria-label="Edit set: one fewer rep">−</button>
-                          <span className="tabular-nums" style={{ fontWeight: 800, fontSize: 20, minWidth: 40, textAlign: "center" }}>{editDraft.r}</span>
-                          <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 44 }} onClick={() => setEditDraft((d) => ({ ...d, r: clamp(d.r + 1, 1, 30) }))} aria-label="Edit set: one more rep">+</button>
+                          <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 40 }} onClick={() => setEditDraft((d) => ({ ...d, r: clamp(d.r - 1, 1, 30) }))} aria-label="Edit set: one fewer rep">−</button>
+                          <input
+                            type="number" inputMode="numeric" aria-label="Edit set: reps"
+                            className="tabular-nums" style={{ ...inputStyle, fontWeight: 800, fontSize: 20, width: 56, textAlign: "center", padding: "8px 4px" }}
+                            value={editDraft.r}
+                            onChange={(e) => { const v = parseInt(e.target.value, 10); setEditDraft((d) => ({ ...d, r: Number.isFinite(v) ? clamp(v, 1, 30) : 1 })); }}
+                          />
+                          <button className="ws-press" style={{ ...btnQuiet, minHeight: 44, width: 40 }} onClick={() => setEditDraft((d) => ({ ...d, r: clamp(d.r + 1, 1, 30) }))} aria-label="Edit set: one more rep">+</button>
                         </div>
                       </div>
                     )}
@@ -1446,29 +1552,14 @@ export default function WorkingSet() {
             </div>
           )}
 
-          <div className="mt-2 flex items-center gap-3">
+          <div className="mt-2">
             <button
-              className="ws-press flex-1"
-              style={{ ...btnQuiet, minHeight: 48, opacity: anyLogged ? 1 : 0.5 }}
+              className="ws-press"
+              style={{ ...btnQuiet, width: "100%", minHeight: 48, opacity: anyLogged ? 1 : 0.5 }}
               onClick={() => finish(plan)}
               disabled={!anyLogged}
             >
               Finish workout
-            </button>
-            {idx < plan.length - 1 && (
-              <button
-                className="ws-press"
-                style={{ background: "none", border: "none", color: C.dust, fontWeight: 600, cursor: "pointer", minHeight: 48, minWidth: 48, padding: "0 12px" }}
-                onClick={goNext}
-              >
-                Next ›
-              </button>
-            )}
-          </div>
-
-          <div className="mt-1.5">
-            <button className="ws-press" style={{ ...btnQuiet, width: "100%" }} onClick={openAdd}>
-              + Add an exercise
             </button>
           </div>
         </div>
@@ -1584,7 +1675,7 @@ export default function WorkingSet() {
       <div style={page}>
         <style>{css}</style>
         <div className="max-w-md mx-auto px-5 pt-8 pb-10">
-          <button onClick={() => setScreen("setup")} style={{ background: "none", border: "none", color: C.dust, fontWeight: 600, cursor: "pointer", padding: 0 }}>
+          <button onClick={() => setScreen("setup")} style={{ background: "none", border: `1px solid ${C.line}`, color: C.chalk, borderRadius: 10, padding: "8px 14px", fontWeight: 700, cursor: "pointer", fontSize: 13, minHeight: 44, display: "inline-flex", alignItems: "center" }}>
             Back
           </button>
           <div className="mt-3"><TickAccent /></div>
@@ -1628,11 +1719,21 @@ export default function WorkingSet() {
       if (e.kind !== "cardio") e.sets.forEach((s) => { vol += s.w * s.r; });
       return { name: e.name, kind: e.kind, sets: e.sets, count: e.sets.length };
     });
+    const historyRecapText = buildRecapText(label, h.durMin, tSets, vol, rows);
+    const copyHistoryRecap = async () => {
+      try {
+        await copyTextToClipboard(historyRecapText);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch {
+        setCopied(false);
+      }
+    };
     return (
       <div style={page}>
         <style>{css}</style>
         <div className="max-w-md mx-auto px-5 pt-8 pb-10">
-          <button onClick={() => setScreen("history")} style={{ background: "none", border: "none", color: C.dust, fontWeight: 600, cursor: "pointer", padding: 0 }}>
+          <button onClick={() => setScreen("history")} style={{ background: "none", border: `1px solid ${C.line}`, color: C.chalk, borderRadius: 10, padding: "8px 14px", fontWeight: 700, cursor: "pointer", fontSize: 13, minHeight: 44, display: "inline-flex", alignItems: "center" }}>
             Back to history
           </button>
           <div className="mt-3"><TickAccent /></div>
@@ -1667,6 +1768,36 @@ export default function WorkingSet() {
               </div>
             ))}
           </div>
+
+          <div className="mt-6 p-4" style={{ background: C.raised, border: `1px solid ${C.line}`, borderRadius: 14 }}>
+            <p style={{ fontWeight: 700, fontSize: 15 }}>For your other trackers</p>
+            <p className="mt-1" style={{ color: C.dust, fontSize: 13 }}>
+              Copy this recap to tag the activity in Whoop or anywhere else.
+            </p>
+            <pre className="mt-3 tabular-nums" style={{ whiteSpace: "pre-wrap", color: C.chalk, fontSize: 13, lineHeight: 1.5, fontFamily: "inherit", margin: 0 }}>
+              {historyRecapText}
+            </pre>
+            <button className="ws-press mt-4" style={{ ...btnQuiet, width: "100%", background: copied ? C.sageDim : C.raised, color: copied ? C.sage : C.chalk }} onClick={copyHistoryRecap}>
+              {copied ? "Copied" : "Copy recap"}
+            </button>
+          </div>
+
+          <div className="mt-3">
+            {confirmDeleteHistory ? (
+              <div className="grid grid-cols-2 gap-2">
+                <button className="ws-press" style={{ ...btnQuiet, width: "100%" }} onClick={() => setConfirmDeleteHistory(false)}>
+                  Cancel
+                </button>
+                <button className="ws-press" style={{ ...btnQuiet, width: "100%", color: "#E06B5C", borderColor: "#E06B5C" }} onClick={() => deleteWorkout(h)}>
+                  Confirm delete
+                </button>
+              </div>
+            ) : (
+              <button className="ws-press" style={{ background: "none", border: "none", color: C.dust, fontWeight: 600, cursor: "pointer", minHeight: 44, width: "100%" }} onClick={() => setConfirmDeleteHistory(true)}>
+                Delete this workout
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -1674,31 +1805,11 @@ export default function WorkingSet() {
 
   // ————————————————— SUMMARY —————————————————
   const sd = summaryData || { durMin: 0, totalSets: 0, volume: 0, lines: [], label: groupsLabel };
-  const summaryText = [
-    `${sd.label || "Workout"} (Working Set)`,
-    `${sd.durMin} min first set to last, ${sd.totalSets} sets, ${sd.volume.toLocaleString()} lb total volume`,
-    ...sd.lines.map((l) =>
-      `${l.name}: ${l.count} set${l.count === 1 ? "" : "s"}, ${l.sets.map(fmtSet).join(", ")}`
-    ),
-  ].join("\n");
+  const summaryText = buildRecapText(sd.label, sd.durMin, sd.totalSets, sd.volume, sd.lines);
 
-  // navigator.clipboard needs a secure context (https or localhost); LAN IP
-  // testing over plain http on a phone falls back to the legacy textarea copy.
   const copySummary = async () => {
     try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(summaryText);
-      } else {
-        const ta = document.createElement("textarea");
-        ta.value = summaryText;
-        ta.style.position = "fixed";
-        ta.style.opacity = "0";
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-      }
+      await copyTextToClipboard(summaryText);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
