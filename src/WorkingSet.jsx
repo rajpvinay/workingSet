@@ -400,6 +400,7 @@ export default function WorkingSet() {
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const [histSel, setHistSel] = useState(null);
   const [confirmDeleteHistory, setConfirmDeleteHistory] = useState(false);
+  const [confirmCancelWorkout, setConfirmCancelWorkout] = useState(false);
   const [selectedGroups, setSelectedGroups] = useState([]);
   const [restOn, setRestOn] = useState(false);
   const [restSeconds, setRestSecondsState] = useState(120); // user's own default rest duration, overriding each exercise's built-in suggestion
@@ -573,6 +574,7 @@ export default function WorkingSet() {
   }, [screen]);
 
   useEffect(() => { setConfirmDeleteHistory(false); }, [histSel]);
+  useEffect(() => { setConfirmCancelWorkout(false); }, [idx]);
 
   useEffect(() => {
     if (screen !== "workout" || !plan.length) return;
@@ -700,6 +702,23 @@ export default function WorkingSet() {
     setSummaryData(null);
     setDraftValues({});
     setScreen("workout");
+  };
+
+  // Discards the workout entirely — nothing gets written anywhere, unlike
+  // "Finish workout" (which this used to be a confusing duplicate of).
+  const cancelWorkout = () => {
+    setRestEnds(null);
+    setScreen("setup");
+    setSelectedGroups([]);
+    setPicked([]);
+    setPlan([]);
+    setLogs({});
+    setDraftValues({});
+    setFirstSetAt(null);
+    setLastSetAt(null);
+    setChanging(false);
+    setAddSheet(false);
+    setConfirmCancelWorkout(false);
   };
 
   const startRest = (sec) => {
@@ -1469,14 +1488,28 @@ export default function WorkingSet() {
             <p style={{ color: C.dust, fontSize: 13, fontWeight: 600 }}>
               Exercise {idx + 1} of {plan.length}
             </p>
-            <div className="flex items-center gap-3">
-              {lifting != null && (
-                <span className="tabular-nums" style={{ color: C.dust, fontSize: 13, fontWeight: 700 }}>{fmtClock(lifting)}</span>
-              )}
-              <button onClick={() => finish(plan)} style={{ background: "none", border: `1px solid ${C.line}`, color: C.dust, borderRadius: 10, padding: "5px 10px", fontWeight: 600, cursor: "pointer", fontSize: 12 }}>
-                End
-              </button>
-            </div>
+            {confirmCancelWorkout ? (
+              <div className="flex items-center gap-2">
+                <button className="ws-press" onClick={() => setConfirmCancelWorkout(false)} style={{ background: "none", border: `1px solid ${C.line}`, color: C.chalk, borderRadius: 10, padding: "5px 10px", fontWeight: 700, cursor: "pointer", fontSize: 12 }}>
+                  Keep going
+                </button>
+                <button className="ws-press" onClick={cancelWorkout} style={{ background: "none", border: "1px solid #E06B5C", color: "#E06B5C", borderRadius: 10, padding: "5px 10px", fontWeight: 700, cursor: "pointer", fontSize: 12 }}>
+                  Discard
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                {lifting != null && (
+                  <span className="tabular-nums" style={{ color: C.dust, fontSize: 13, fontWeight: 700 }}>{fmtClock(lifting)}</span>
+                )}
+                <button
+                  onClick={() => (anyLogged ? setConfirmCancelWorkout(true) : cancelWorkout())}
+                  style={{ background: "none", border: `1px solid ${C.line}`, color: C.dust, borderRadius: 10, padding: "5px 10px", fontWeight: 600, cursor: "pointer", fontSize: 12 }}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="mt-2 flex items-center justify-between gap-2">
