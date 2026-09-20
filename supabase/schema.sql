@@ -52,7 +52,7 @@ create index if not exists workouts_user_date_idx on workouts (user_id, date des
 create table if not exists settings (
   user_id uuid primary key references auth.users(id) on delete cascade,
   rest_on boolean not null default false,
-  rest_seconds integer not null default 90
+  rest_seconds integer not null default 120
 );
 
 alter table exercise_state enable row level security;

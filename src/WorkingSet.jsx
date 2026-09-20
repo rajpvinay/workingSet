@@ -219,6 +219,20 @@ const copyTextToClipboard = async (text) => {
   }
 };
 
+// A finished workout is the whole point of the app - it must never
+// silently vanish because the network was bad at the gym or the auth
+// token went stale while the phone was locked between sets. Every
+// finished workout is written here FIRST (synchronous, always
+// succeeds), then a sync attempt fires; anything that doesn't make it
+// to Supabase stays queued and gets retried on next load or when the
+// app becomes visible again, rather than being lost.
+const PENDING_KEY = "ws_pending_workouts";
+const readPendingQueue = () => {
+  try { return JSON.parse(localStorage.getItem(PENDING_KEY) || "[]"); } catch { return []; }
+};
+const writePendingQueue = (queue) => {
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify(queue)); } catch {}
+};
 
 // Horizontal precision scroller (tape/ruler). Thumb-scroll to a 1-unit
 // value; last-time (grey) and PB (amber) render as ticks you can land on.
@@ -388,7 +402,7 @@ export default function WorkingSet() {
   const [confirmDeleteHistory, setConfirmDeleteHistory] = useState(false);
   const [selectedGroups, setSelectedGroups] = useState([]);
   const [restOn, setRestOn] = useState(false);
-  const [restSeconds, setRestSecondsState] = useState(90); // user's own default rest duration, overriding each exercise's built-in suggestion
+  const [restSeconds, setRestSecondsState] = useState(120); // user's own default rest duration, overriding each exercise's built-in suggestion
   const [picked, setPicked] = useState([]);
   const [addingFor, setAddingFor] = useState(null);
   const [newName, setNewName] = useState("");
@@ -401,6 +415,10 @@ export default function WorkingSet() {
   const [expandedGroup, setExpandedGroup] = useState(null); // other-group accordion in Change/Add sheet
   const [weight, setWeight] = useState(0);
   const [reps, setReps] = useState(10);
+  // Per-exercise scratch values, keyed by exercise id, so navigating away
+  // (superset arrows) and back restores whatever was left dialed in,
+  // instead of resetting to last-time/history every time.
+  const [draftValues, setDraftValues] = useState({});
   const [editingSetIdx, setEditingSetIdx] = useState(null); // index into the current exercise's logged sets, or null
   const [editDraft, setEditDraft] = useState(null); // { w, r } or { min } while editing
   const [firstSetAt, setFirstSetAt] = useState(null);
@@ -503,6 +521,22 @@ export default function WorkingSet() {
           setRestOn(!!settingsRes.data.rest_on);
           if (settingsRes.data.rest_seconds != null) setRestSecondsState(settingsRes.data.rest_seconds);
         }
+
+        // Anything still sitting in the pending queue from a previous
+        // session (save failed, or the app was closed before it could
+        // retry) — surface it in the list right away even before this
+        // retry resolves, then try again now that we have a fresh session.
+        const pending = readPendingQueue().filter((p) => p.user_id === userId);
+        if (pending.length) {
+          setHistory((h) => {
+            const existingIds = new Set(h.map((e) => e.id));
+            const toAdd = pending
+              .filter((p) => !existingIds.has(p.localId))
+              .map((p) => ({ id: p.localId, date: p.date, groups: p.groups, durMin: p.dur_min, entries: p.entries }));
+            return [...toAdd, ...h];
+          });
+          pending.forEach((p) => syncPendingWorkout(p));
+        }
       } catch (err) {
         console.error("Failed to load from Supabase", err);
       } finally {
@@ -510,6 +544,26 @@ export default function WorkingSet() {
       }
     })();
     return () => { cancelled = true; };
+  }, [userId]);
+
+  // Mobile Safari suspends JS timers while the tab is backgrounded (screen
+  // locked between sets is the common case here), so Supabase's own
+  // auto-refresh can miss renewing the session in time. Pausing it while
+  // hidden and forcing an immediate check on return is Supabase's own
+  // documented fix for exactly this — and it's the moment to retry
+  // anything still stuck in the pending queue, too.
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        supabase.auth.startAutoRefresh();
+        if (userId) readPendingQueue().filter((p) => p.user_id === userId).forEach((p) => syncPendingWorkout(p));
+      } else {
+        supabase.auth.stopAutoRefresh();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
   }, [userId]);
 
   useEffect(() => {
@@ -522,15 +576,45 @@ export default function WorkingSet() {
 
   useEffect(() => {
     if (screen !== "workout" || !plan.length) return;
-    const ex = exDb[plan[idx]];
+    const id = plan[idx];
+    const ex = exDb[id];
     if (!ex) return;
-    const hasHist = ex.history.length > 0;
-    const mid = ex.min + Math.round((ex.max - ex.min) / 2 / ex.step) * ex.step;
-    setWeight(hasHist ? last(ex.history) : ex.start ?? mid);
-    setReps(ex.reps || 10);
+    const existing = draftValues[id];
+    if (existing) {
+      setWeight(existing.weight);
+      setReps(existing.reps);
+    } else {
+      const hasHist = ex.history.length > 0;
+      const mid = ex.min + Math.round((ex.max - ex.min) / 2 / ex.step) * ex.step;
+      const w = hasHist ? last(ex.history) : ex.start ?? mid;
+      const r = ex.reps || 10;
+      setWeight(w);
+      setReps(r);
+      setDraftValues((d) => ({ ...d, [id]: { weight: w, reps: r } }));
+    }
     setEditingSetIdx(null);
     setEditDraft(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen, idx, plan]);
+
+  // Every place weight/reps can change goes through these, so the draft
+  // for whichever exercise is current always stays in sync.
+  const updateWeight = (updater) => {
+    setWeight((w) => {
+      const next = typeof updater === "function" ? updater(w) : updater;
+      const id = plan[idx];
+      if (id) setDraftValues((d) => ({ ...d, [id]: { ...(d[id] || {}), weight: next } }));
+      return next;
+    });
+  };
+  const updateReps = (updater) => {
+    setReps((r) => {
+      const next = typeof updater === "function" ? updater(r) : updater;
+      const id = plan[idx];
+      if (id) setDraftValues((d) => ({ ...d, [id]: { ...(d[id] || {}), reps: next } }));
+      return next;
+    });
+  };
 
   const restLeft = restEnds ? Math.max(0, Math.ceil((restEnds - now) / 1000)) : null;
   const restDone = restEnds !== null && restLeft === 0;
@@ -614,6 +698,7 @@ export default function WorkingSet() {
     setLastSetAt(null);
     setNow(Date.now());
     setSummaryData(null);
+    setDraftValues({});
     setScreen("workout");
   };
 
@@ -662,6 +747,30 @@ export default function WorkingSet() {
   };
 
   // Duration = first logged set to last logged set.
+  // Pushes one queued workout (+ its exercise_state rollup) to Supabase.
+  // Safe to call repeatedly: on success it removes itself from the
+  // pending queue and swaps the entry's localId for the real row id; on
+  // failure it just leaves the queue entry there for the next retry.
+  const syncPendingWorkout = async (payload) => {
+    const { data, error } = await supabase
+      .from("workouts")
+      .insert({ user_id: payload.user_id, date: payload.date, groups: payload.groups, dur_min: payload.dur_min, entries: payload.entries })
+      .select()
+      .single();
+    if (error) { console.error("Workout still pending sync", error); return; }
+    setHistory((h) => h.map((e) => (e.id === payload.localId ? { ...e, id: data.id } : e)));
+    writePendingQueue(readPendingQueue().filter((p) => p.localId !== payload.localId));
+    if (payload.exerciseState?.length) {
+      const { error: stateErr } = await supabase
+        .from("exercise_state")
+        .upsert(
+          payload.exerciseState.map((s) => ({ user_id: payload.user_id, id: s.id, history: s.history, pb: s.pb, updated_at: new Date().toISOString() })),
+          { onConflict: "user_id,id" }
+        );
+      if (stateErr) console.error("Failed to sync exercise history/PB", stateErr);
+    }
+  };
+
   const finish = (planArr) => {
     setRestEnds(null);
     const durMin = firstSetAt && lastSetAt ? Math.max(1, Math.round((lastSetAt - firstSetAt) / 60000)) : 0;
@@ -682,9 +791,11 @@ export default function WorkingSet() {
     if (entries.length) {
       const date = todayISO();
       const groups = [...selectedGroups];
-      // id starts null and is filled in once the insert below resolves —
-      // kept as the same object reference so that update can find it.
-      const localEntry = { id: null, date, groups, durMin, entries };
+      // Real id assigned once synced; until then this local id is what the
+      // entry is known by, both in `history` and in the pending queue, so
+      // a later sync (or a delete before it even syncs) can find it.
+      const localId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const localEntry = { id: localId, date, groups, durMin, entries };
       setHistory((h) => [localEntry, ...h]);
       let updatedState = [];
       setExDb((db) => {
@@ -700,22 +811,13 @@ export default function WorkingSet() {
         return nd;
       });
       if (isSupabaseConfigured && userId) {
-        supabase
-          .from("workouts")
-          .insert({ user_id: userId, date, groups, dur_min: durMin, entries })
-          .select()
-          .single()
-          .then(({ data, error }) => {
-            if (error) { console.error("Failed to save workout", error); return; }
-            setHistory((h) => h.map((e) => (e === localEntry ? { ...e, id: data.id } : e)));
-          });
-        supabase
-          .from("exercise_state")
-          .upsert(
-            updatedState.map((s) => ({ user_id: userId, id: s.id, history: s.history, pb: s.pb, updated_at: new Date().toISOString() })),
-            { onConflict: "user_id,id" }
-          )
-          .then(({ error }) => { if (error) console.error("Failed to save exercise history/PB", error); });
+        const payload = { localId, user_id: userId, date, groups, dur_min: durMin, entries, exerciseState: updatedState };
+        // Queued to disk before any network attempt — if the save fails
+        // (bad signal, stale auth token after the phone locked mid-set)
+        // the workout is still safely recorded and will retry on next
+        // load or the next time the app comes back to the foreground.
+        writePendingQueue([...readPendingQueue(), payload]);
+        syncPendingWorkout(payload);
       }
     }
     setScreen("summary");
@@ -823,7 +925,12 @@ export default function WorkingSet() {
 
   const deleteWorkout = (entry) => {
     setHistory((h) => h.filter((e) => e !== entry));
-    if (isSupabaseConfigured && userId && entry.id) {
+    // Not yet synced (still mid-retry) — just drop it from the queue
+    // rather than firing a delete for an id Supabase has never seen.
+    const pending = readPendingQueue();
+    if (pending.some((p) => p.localId === entry.id)) {
+      writePendingQueue(pending.filter((p) => p.localId !== entry.id));
+    } else if (isSupabaseConfigured && userId && entry.id) {
       supabase
         .from("workouts")
         .delete()
@@ -1324,7 +1431,11 @@ export default function WorkingSet() {
     const diff = hasHist ? weight - lastVal : null;
     // Precision scroller domain: 0 (BW) up to the exercise's max plus
     // generous headroom, at 1-unit resolution.
-    const rCeil = isCardio ? Math.max(ex.max, 45) + 15 : Math.max(ex.max, ex.pb ?? 0) + 100;
+    // Headroom bumped from 100 to 150, and now also tracks the live value
+    // itself (not just history/PB) - a strong lifter whose working weight
+    // already sits at or past the exercise's built-in `max` was hitting a
+    // hard, un-scrollable ceiling with the old formula.
+    const rCeil = isCardio ? Math.max(ex.max, 45) + 15 : Math.max(ex.max, ex.pb ?? 0, weight, editDraft?.w ?? 0) + 150;
     const lifting = firstSetAt ? Math.max(0, Math.floor((now - firstSetAt) / 1000)) : null;
     // With free navigation there's no single fixed "last" exercise anymore,
     // so Finish is available from anywhere - gated only on whether anything
@@ -1355,27 +1466,9 @@ export default function WorkingSet() {
 
         <div className="max-w-md mx-auto px-5 pt-2" style={{ paddingBottom: restEnds !== null && !sheetOpen ? 170 : 14 }}>
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1">
-              <button
-                onClick={goPrev}
-                disabled={idx === 0}
-                aria-label="Previous exercise"
-                style={{ background: "none", border: "none", color: C.dust, fontSize: 20, fontWeight: 700, cursor: idx === 0 ? "default" : "pointer", opacity: idx === 0 ? 0.3 : 1, minHeight: 44, minWidth: 32, padding: 0 }}
-              >
-                ‹
-              </button>
-              <p style={{ color: C.dust, fontSize: 13, fontWeight: 600 }}>
-                Exercise {idx + 1} of {plan.length}
-              </p>
-              <button
-                onClick={goNext}
-                disabled={idx === plan.length - 1}
-                aria-label="Next exercise"
-                style={{ background: "none", border: "none", color: C.dust, fontSize: 20, fontWeight: 700, cursor: idx === plan.length - 1 ? "default" : "pointer", opacity: idx === plan.length - 1 ? 0.3 : 1, minHeight: 44, minWidth: 32, padding: 0 }}
-              >
-                ›
-              </button>
-            </div>
+            <p style={{ color: C.dust, fontSize: 13, fontWeight: 600 }}>
+              Exercise {idx + 1} of {plan.length}
+            </p>
             <div className="flex items-center gap-3">
               {lifting != null && (
                 <span className="tabular-nums" style={{ color: C.dust, fontSize: 13, fontWeight: 700 }}>{fmtClock(lifting)}</span>
@@ -1447,7 +1540,7 @@ export default function WorkingSet() {
               isCardio={isCardio}
               lastVal={hasHist ? lastVal : null}
               pb={ex.pb}
-              onChange={setWeight}
+              onChange={updateWeight}
               height={70}
             />
             {(hasHist || ex.pb != null) && (
@@ -1461,18 +1554,18 @@ export default function WorkingSet() {
           {/* fine adjust + reps */}
           <div className="mt-2 grid grid-cols-2 gap-2">
             <div className="flex items-center gap-2">
-              <button className="ws-press flex-1" style={btnQuiet} onClick={() => setWeight((w) => Math.max(0, w - ex.step))} aria-label={`Decrease by ${ex.step}`}>
+              <button className="ws-press flex-1" style={btnQuiet} onClick={() => updateWeight((w) => Math.max(0, w - ex.step))} aria-label={`Decrease by ${ex.step}`}>
                 −{ex.step}
               </button>
-              <button className="ws-press flex-1" style={btnQuiet} onClick={() => setWeight((w) => Math.min(rCeil, w + ex.step))} aria-label={`Increase by ${ex.step}`}>
+              <button className="ws-press flex-1" style={btnQuiet} onClick={() => updateWeight((w) => Math.min(rCeil, w + ex.step))} aria-label={`Increase by ${ex.step}`}>
                 +{ex.step}
               </button>
             </div>
             {!isCardio && (
               <div className="flex items-center justify-between px-2" style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 12 }}>
-                <button className="ws-press" style={{ ...btnQuiet, border: "none", background: "none", minHeight: 48, width: 44, fontSize: 20 }} onClick={() => setReps((r) => clamp(r - 1, 1, 30))} aria-label="One fewer rep">−</button>
+                <button className="ws-press" style={{ ...btnQuiet, border: "none", background: "none", minHeight: 48, width: 44, fontSize: 20 }} onClick={() => updateReps((r) => clamp(r - 1, 1, 30))} aria-label="One fewer rep">−</button>
                 <span className="tabular-nums" style={{ fontWeight: 800, fontSize: 18 }}>{reps} <span style={{ color: C.dust, fontSize: 13, fontWeight: 600 }}>reps</span></span>
-                <button className="ws-press" style={{ ...btnQuiet, border: "none", background: "none", minHeight: 48, width: 44, fontSize: 20 }} onClick={() => setReps((r) => clamp(r + 1, 1, 30))} aria-label="One more rep">+</button>
+                <button className="ws-press" style={{ ...btnQuiet, border: "none", background: "none", minHeight: 48, width: 44, fontSize: 20 }} onClick={() => updateReps((r) => clamp(r + 1, 1, 30))} aria-label="One more rep">+</button>
               </div>
             )}
           </div>
@@ -1551,6 +1644,30 @@ export default function WorkingSet() {
               )}
             </div>
           )}
+
+          {/* prominent bottom nav between exercises — supersets live here:
+              move freely, come back, whatever's dialed in per exercise
+              stays put (see draftValues) */}
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              className="ws-press"
+              onClick={goPrev}
+              disabled={idx === 0}
+              aria-label="Previous exercise"
+              style={{ ...btnQuiet, flex: 1, minHeight: 56, fontSize: 26, fontWeight: 800, opacity: idx === 0 ? 0.35 : 1 }}
+            >
+              ‹
+            </button>
+            <button
+              className="ws-press"
+              onClick={goNext}
+              disabled={idx === plan.length - 1}
+              aria-label="Next exercise"
+              style={{ ...btnQuiet, flex: 1, minHeight: 56, fontSize: 26, fontWeight: 800, opacity: idx === plan.length - 1 ? 0.35 : 1 }}
+            >
+              ›
+            </button>
+          </div>
 
           <div className="mt-2">
             <button
