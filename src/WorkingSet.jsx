@@ -1488,28 +1488,17 @@ export default function WorkingSet() {
             <p style={{ color: C.dust, fontSize: 13, fontWeight: 600 }}>
               Exercise {idx + 1} of {plan.length}
             </p>
-            {confirmCancelWorkout ? (
-              <div className="flex items-center gap-2">
-                <button className="ws-press" onClick={() => setConfirmCancelWorkout(false)} style={{ background: "none", border: `1px solid ${C.line}`, color: C.chalk, borderRadius: 10, padding: "5px 10px", fontWeight: 700, cursor: "pointer", fontSize: 12 }}>
-                  Keep going
-                </button>
-                <button className="ws-press" onClick={cancelWorkout} style={{ background: "none", border: "1px solid #E06B5C", color: "#E06B5C", borderRadius: 10, padding: "5px 10px", fontWeight: 700, cursor: "pointer", fontSize: 12 }}>
-                  Discard
-                </button>
-              </div>
-            ) : (
-              <div className="flex items-center gap-3">
-                {lifting != null && (
-                  <span className="tabular-nums" style={{ color: C.dust, fontSize: 13, fontWeight: 700 }}>{fmtClock(lifting)}</span>
-                )}
-                <button
-                  onClick={() => (anyLogged ? setConfirmCancelWorkout(true) : cancelWorkout())}
-                  style={{ background: "none", border: `1px solid ${C.line}`, color: C.dust, borderRadius: 10, padding: "5px 10px", fontWeight: 600, cursor: "pointer", fontSize: 12 }}
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
+            <div className="flex items-center gap-3">
+              {lifting != null && (
+                <span className="tabular-nums" style={{ color: C.dust, fontSize: 13, fontWeight: 700 }}>{fmtClock(lifting)}</span>
+              )}
+              <button
+                onClick={() => (anyLogged ? setConfirmCancelWorkout(true) : cancelWorkout())}
+                style={{ background: "none", border: `1px solid ${C.line}`, color: C.dust, borderRadius: 10, padding: "5px 10px", fontWeight: 600, cursor: "pointer", fontSize: 12 }}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
 
           <div className="mt-2 flex items-center justify-between gap-2">
@@ -1812,6 +1801,32 @@ export default function WorkingSet() {
                   </div>
                 </>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* cancel-workout confirmation — a full screen on purpose, not the
+            small inline swap this used to be: a destructive action that
+            throws away real logged work deserves a deliberate second step
+            that's hard to blow through by accident. */}
+        {confirmCancelWorkout && (
+          <div className="fixed inset-0 flex flex-col items-center justify-center px-6 text-center" style={{ background: C.floor, zIndex: 60 }}>
+            <TickAccent />
+            <h1 style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-0.02em" }}>Cancel this workout?</h1>
+            <p className="mt-2" style={{ color: C.dust, fontSize: 15, lineHeight: 1.5, maxWidth: 320 }}>
+              Everything logged so far will be thrown away. This can't be undone.
+            </p>
+            <div className="mt-8 w-full" style={{ maxWidth: 320 }}>
+              <button className="ws-press" style={{ ...btnQuiet, width: "100%", minHeight: 56, fontSize: 16 }} onClick={() => setConfirmCancelWorkout(false)}>
+                Back to workout
+              </button>
+              <button
+                className="ws-press mt-3"
+                style={{ background: "#E06B5C", color: "#fff", border: "none", borderRadius: 14, fontWeight: 800, fontSize: 16, minHeight: 56, width: "100%", cursor: "pointer" }}
+                onClick={cancelWorkout}
+              >
+                Yes, discard it
+              </button>
             </div>
           </div>
         )}
