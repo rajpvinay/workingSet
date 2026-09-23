@@ -1193,7 +1193,7 @@ export default function WorkingSet() {
           ) : (
             <>
               <p className="mt-2" style={{ color: C.dust, fontSize: 15 }}>
-                Your history and personal bests are private to you. Enter your email and we'll send a code — no password to remember.
+                Working Set remembers your last lift and personal bests mid-workout — sign in with just your email, no password needed.
               </p>
               <div className="mt-5">
                 <input
@@ -1511,26 +1511,29 @@ export default function WorkingSet() {
               <button onClick={openChange} className="ws-press" style={btnPillSmall}>Change</button>
             </div>
           </div>
-          <h1 className="mt-0.5" style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>{ex.name}</h1>
-
-          <div className="mt-1 flex items-center gap-3">
-            <div>
-              <p style={{ color: C.dust, fontSize: 13 }}>
-                {hasHist ? (isCardio ? `Last time ${lastVal} min` : `Last time ${fmtW(lastVal)} x ${ex.reps}`) : "First time, no history yet"}
+          <div className="mt-0.5 flex items-start justify-between gap-3">
+            <div className="flex-1" style={{ minWidth: 0 }}>
+              <h1 style={{ fontSize: 22, fontWeight: 800, letterSpacing: "-0.02em" }}>{ex.name}</h1>
+              {ex.cues.length > 0 && (
+                <div className="mt-2 pl-3" style={{ borderLeft: `2px solid ${C.cobalt}` }}>
+                  {ex.cues.map((c, i) => (
+                    <p key={i} style={{ color: C.dust, fontSize: 12, lineHeight: 1.35 }}>{c}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+            {/* last time / PB kept small and to the side, rather than its
+                own row, so it's always in view alongside the name/cues
+                instead of competing with the hero readout for attention */}
+            <div className="text-right" style={{ flexShrink: 0, maxWidth: 108 }}>
+              <p style={{ color: C.dust, fontSize: 11, lineHeight: 1.4 }}>
+                {hasHist ? (isCardio ? `last ${lastVal} min` : `last ${fmtW(lastVal)} x ${ex.reps}`) : "no history yet"}
               </p>
               {ex.pb != null && (
-                <p style={{ color: C.amber, fontSize: 13, fontWeight: 700 }}>Personal best {isCardio ? `${ex.pb} min` : fmtW(ex.pb)}</p>
+                <p style={{ color: C.amber, fontSize: 11, fontWeight: 700, lineHeight: 1.4 }}>best {isCardio ? `${ex.pb} min` : fmtW(ex.pb)}</p>
               )}
             </div>
           </div>
-
-          {ex.cues.length > 0 && (
-            <div className="mt-2 pl-3" style={{ borderLeft: `2px solid ${C.cobalt}` }}>
-              {ex.cues.map((c, i) => (
-                <p key={i} style={{ color: C.dust, fontSize: 12, lineHeight: 1.35 }}>{c}</p>
-              ))}
-            </div>
-          )}
 
           {/* hero readout */}
           <div className="mt-2 text-center">
