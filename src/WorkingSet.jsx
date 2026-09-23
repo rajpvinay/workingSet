@@ -147,7 +147,7 @@ const GROUP_DEFS = [
     ],
   },
   {
-    id: "cardio", label: "Light cardio", hint: "Minutes-based finisher", cardio: true,
+    id: "cardio", label: "Cardio", hint: "Minutes-based finisher", cardio: true,
     items: [
       ["Bike (steady pace)", 5, 40, 1, 20, ["Easy conversational pace", "Zone 2, nose breathing"]],
       ["Incline treadmill walk", 5, 40, 1, 20, ["No holding the handles", "Tall posture, steady stride"]],
